@@ -6,8 +6,8 @@
    so the player can use RSS data without it being in the hardcoded episodes.js.
 ───────────────────────────────────────────────────────────────────────────── */
 
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { parseRSSFeed } from "../utils/rssParser";
 
 /* ── HELPER: formatDate ─────────────────────────────────────────────────────
@@ -49,6 +49,9 @@ function formatDuration(raw) {
 function RSSPage() {
   const navigate = useNavigate();
 
+  /* useLocation gives us the current URL, including the search string (?url=...) */
+  const location = useLocation();
+
   /* The URL the user has typed into the input field */
   const [inputUrl, setInputUrl] = useState("");
 
@@ -64,19 +67,25 @@ function RSSPage() {
   /* episodes holds the array of parsed episode objects from the feed */
   const [episodes, setEpisodes] = useState([]);
 
-  /* ── handleLoad ───────────────────────────────────────────────────────────
-     Called when the user clicks "Load Podcast" or presses Enter.
-     Validates the input, calls parseRSSFeed, and updates state.           */
-  async function handleLoad() {
-    const trimmedUrl = inputUrl.trim();
+  /* ── loadFeed ─────────────────────────────────────────────────────────────
+     Core loading function.  Accepts the feed URL as a direct argument so it
+     can be called from both the button click handler AND the useEffect below
+     without any dependency on the inputUrl state value.
 
-    /* Basic guard — ensure the user actually typed something */
+     This separation matters because React state updates are asynchronous —
+     if we called setInputUrl(url) and then read inputUrl in the same tick,
+     we'd still see the old (empty) value.  By passing the URL in directly
+     we bypass that problem entirely.                                        */
+  async function loadFeed(url) {
+    const trimmedUrl = url.trim();
+
+    /* Basic guard — ensure there is actually something to fetch */
     if (!trimmedUrl) {
       setError("Please enter an RSS feed URL.");
       return;
     }
 
-    /* Reset previous results and error before each new fetch */
+    /* Reset previous results and any existing error before each new fetch */
     setError("");
     setChannel(null);
     setEpisodes([]);
@@ -92,17 +101,56 @@ function RSSPage() {
       console.error("[RSSPage] Load error:", err);
       setError(err.message || "Something went wrong loading the feed.");
     } finally {
-      /* Always turn the spinner off whether it succeeded or failed */
+      /* Always turn the spinner off whether the fetch succeeded or failed */
       setLoading(false);
     }
+  }
+
+  /* ── handleLoad ───────────────────────────────────────────────────────────
+     Thin wrapper called by the button and the Enter key handler.
+     Reads the current inputUrl state and passes it straight to loadFeed.   */
+  function handleLoad() {
+    loadFeed(inputUrl);
   }
 
   /* ── handleKeyDown ────────────────────────────────────────────────────────
      Allows the user to press Enter in the input field instead of clicking
      the button — a standard UX pattern for search/load inputs.            */
   function handleKeyDown(e) {
-    if (e.key === "Enter") handleLoad();
+    if (e.key === "Enter") loadFeed(inputUrl);
   }
+
+  /* ── useEffect: auto-load from query param ───────────────────────────────
+     When this page is opened with a ?url= query parameter — for example
+     /rss?url=https://feeds.megaphone.fm/darknetdiaries — we want to:
+       1. Pre-fill the visible input field with that URL so the user can see
+          what was loaded (or edit it to try a different feed)
+       2. Immediately trigger the fetch so the page loads without any clicks
+
+     The empty dependency array [] means this effect runs exactly once, right
+     after the component first mounts.  We don't need it to re-run on every
+     render — we only want to act on the URL that was present at page load.  */
+  useEffect(() => {
+    /* URLSearchParams parses the query string, e.g. "?url=https://..." into
+       a map of key/value pairs we can read with .get()                      */
+    const params = new URLSearchParams(location.search);
+    const urlParam = params.get("url");
+
+    /* Only proceed if a non-empty url param is actually present */
+    if (urlParam && urlParam.trim()) {
+      /* Update the visible input field so the user can see (and edit) the URL */
+      setInputUrl(urlParam.trim());
+
+      /* Trigger the fetch immediately — pass the param value directly to
+         loadFeed rather than relying on inputUrl state, because the
+         setInputUrl call above is asynchronous and inputUrl would still
+         be empty if we tried to read it right here.                         */
+      loadFeed(urlParam.trim());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    /* loadFeed is intentionally omitted from deps — we only want this to
+       run once on mount, not every time the component re-renders.          */
+  }, []);
 
   /* ── handlePlay ───────────────────────────────────────────────────────────
      Navigates to the player page for a specific episode.

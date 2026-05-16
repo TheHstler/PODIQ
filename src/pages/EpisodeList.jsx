@@ -1,10 +1,64 @@
 import { useNavigate } from "react-router-dom";
-import { useState } from "react"; 
-import episodes from "../data/episodes";
+import { useState } from "react";
+
+/* ── FEATURED PODCASTS ───────────────────────────────────────────────────────
+   These are the example podcasts shown on the homepage as large tiles.
+   Clicking one loads its episodes on the RSS page.                        */
+const FEATURED_PODCASTS = [
+  {
+    title: "Freakonomics Radio",
+    description:
+      "Surprising and counterintuitive stories about economics and human behaviour.",
+    rssUrl: "https://feeds.simplecast.com/Y8lFbOT4",
+    /* Using picsum as reliable placeholder — replace with real artwork later */
+    image: "https://picsum.photos/seed/freakonomics/600/400",
+    color: "#1a3a2a",
+  },
+  {
+    title: "Darknet Diaries",
+    description:
+      "True stories from the dark side of the internet — hacking, cybercrime and espionage.",
+    rssUrl: "https://feeds.megaphone.fm/darknetdiaries",
+    image: "https://picsum.photos/seed/darknet/600/400",
+    color: "#1a1a3a",
+  },
+  {
+    title: "The Daily",
+    description:
+      "The biggest stories of our time, told by the journalists who cover them.",
+    rssUrl: "https://feeds.simplecast.com/54nAGcIl",
+    image: "https://picsum.photos/seed/thedaily/600/400",
+    color: "#2a1a1a",
+  },
+  {
+    title: "How I Built This",
+    description:
+      "Guy Raz dives into the stories behind some of the world's best known companies.",
+    rssUrl: "https://feeds.npr.org/510313/podcast.xml",
+    image: "https://picsum.photos/seed/howIbuilt/600/400",
+    color: "#2a2a1a",
+  },
+];
 
 function EpisodeList() {
   const navigate = useNavigate();
-  const [rssUrl, setRssUrl] = useState(""); /* tracks what user types in the box */
+  const [rssUrl, setRssUrl] = useState("");
+
+  /* ── HANDLE RSS URL INPUT ────────────────────────────────────────────────
+     When user pastes a URL and clicks Load or presses Enter, navigate
+     to the RSS page with the URL as a query parameter.                   */
+  function handleLoadUrl() {
+    if (rssUrl.trim()) {
+      navigate(`/rss?url=${encodeURIComponent(rssUrl.trim())}`);
+    }
+  }
+
+  /* ── HANDLE FEATURED PODCAST CLICK ──────────────────────────────────────
+     Clicking a featured tile navigates to the RSS page with that
+     podcast's feed URL — same flow as pasting a URL manually.           */
+  function handleFeaturedClick(feedUrl) {
+    navigate(`/rss?url=${encodeURIComponent(feedUrl)}`);
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#0d0d1a" }}>
@@ -22,7 +76,6 @@ function EpisodeList() {
           zIndex: 100,
         }}
       >
-        {/* Brand name top left */}
         <span
           style={{
             fontSize: "1.4rem",
@@ -34,41 +87,9 @@ function EpisodeList() {
         >
           POD<span style={{ color: "#fff" }}>PLAYER</span>
         </span>
-
-        {/* Right side of nav: episode count + RSS button side by side */}
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <span style={{ color: "#4a4a7a", fontSize: "0.85rem" }}>
-            {episodes.length} episodes
-          </span>
-
-          {/* Navigates to /rss so the user can load any podcast feed */}
-          <button
-            onClick={() => navigate("/rss")}
-            style={{
-              background: "rgba(232,255,71,0.1)",
-              border: "1px solid rgba(232,255,71,0.25)",
-              color: "#e8ff47",
-              padding: "0.4rem 1rem",
-              borderRadius: "20px",
-              cursor: "pointer",
-              fontSize: "0.82rem",
-              fontWeight: "bold",
-              letterSpacing: "0.02em",
-              transition: "background 0.2s",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "rgba(232,255,71,0.18)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.background = "rgba(232,255,71,0.1)")
-            }
-          >
-            + Load Podcast from RSS
-          </button>
-        </div>
       </nav>
 
-      {/* ── HERO SECTION — centred PODPLAYER title, tagline, search ── */}
+      {/* ── HERO SECTION ── */}
       <div
         style={{
           display: "flex",
@@ -76,7 +97,6 @@ function EpisodeList() {
           alignItems: "center",
           textAlign: "center",
           padding: "5rem 2rem 3.5rem",
-          /* indigo radial glow behind the hero text */
           background:
             "radial-gradient(ellipse at 50% 0%, #1a1a4a 0%, #0d0d1a 70%)",
         }}
@@ -96,7 +116,7 @@ function EpisodeList() {
           POD<span style={{ color: "#ffffff" }}>PLAYER</span>
         </h1>
 
-        {/* Tagline just below the title */}
+        {/* Tagline */}
         <p
           style={{
             color: "#5a5a9a",
@@ -110,10 +130,8 @@ function EpisodeList() {
           Listen. Learn. Reflect.
         </p>
 
-        {/* ── RSS URL INPUT ──
-    This is the main way to load a podcast — paste any RSS feed URL here.
-    Pressing Enter or clicking the button navigates to the RSS page with
-    the URL pre-filled so it loads automatically.                          */}
+        {/* ── RSS URL INPUT ─────────────────────────────────────────────────
+            User can paste any podcast RSS URL here to load it.           */}
         <div
           style={{
             width: "100%",
@@ -122,7 +140,6 @@ function EpisodeList() {
             gap: "0.5rem",
           }}
         >
-          {/* URL input field */}
           <div style={{ position: "relative", flex: 1 }}>
             <span
               style={{
@@ -142,11 +159,9 @@ function EpisodeList() {
               placeholder="Paste a podcast RSS feed URL..."
               value={rssUrl}
               onChange={(e) => setRssUrl(e.target.value)}
-              /* pressing Enter triggers the same action as the button */
+              /* pressing Enter triggers load */
               onKeyDown={(e) => {
-                if (e.key === "Enter" && rssUrl.trim()) {
-                  navigate(`/rss?url=${encodeURIComponent(rssUrl.trim())}`);
-                }
+                if (e.key === "Enter") handleLoadUrl();
               }}
               style={{
                 width: "100%",
@@ -162,15 +177,8 @@ function EpisodeList() {
               }}
             />
           </div>
-
-          {/* Load button */}
           <button
-            onClick={() => {
-              /* Only navigate if the user actually typed something */
-              if (rssUrl.trim()) {
-                navigate(`/rss?url=${encodeURIComponent(rssUrl.trim())}`);
-              }
-            }}
+            onClick={handleLoadUrl}
             style={{
               background: "#e8ff47",
               color: "#0d0d1a",
@@ -187,165 +195,153 @@ function EpisodeList() {
             Load →
           </button>
         </div>
-
-        {/* ── RSS LINK — below the search bar, invites users to load any feed ── */}
-        <p
-          style={{
-            marginTop: "1.25rem",
-            color: "#3a3a6a",
-            fontSize: "0.85rem",
-          }}
-        >
-          Want to listen to another podcast?{" "}
-          <span
-            onClick={() => navigate("/rss")}
-            style={{
-              color: "#e8ff47",
-              cursor: "pointer",
-              textDecoration: "underline",
-              textUnderlineOffset: "3px",
-            }}
-          >
-            + Load Podcast from RSS
-          </span>
-        </p>
       </div>
 
-      {/* ── EPISODE LIST ── */}
+      {/* ── FEATURED PODCASTS GRID ── */}
       <div
-        style={{ maxWidth: "860px", margin: "0 auto", padding: "0 2rem 4rem" }}
+        style={{ maxWidth: "960px", margin: "0 auto", padding: "0 2rem 4rem" }}
       >
-        {/* Section label above the cards */}
-        <p
-          style={{
-            color: "#3a3a6a",
-            fontSize: "0.75rem",
-            letterSpacing: "0.2em",
-            textTransform: "uppercase",
-            marginBottom: "1rem",
-          }}
-        >
-          All Episodes
-        </p>
+        {/* Section heading */}
+        <div style={{ marginBottom: "1.5rem" }}>
+          <p
+            style={{
+              color: "#e8ff47",
+              fontSize: "0.75rem",
+              letterSpacing: "0.2em",
+              textTransform: "uppercase",
+              marginBottom: "0.4rem",
+            }}
+          >
+            Featured Podcasts
+          </p>
+          <p style={{ color: "#3a3a6a", fontSize: "0.85rem" }}>
+            Click any show to browse its episodes
+          </p>
+        </div>
 
-        {/* Cards container — 1px gap gives a "divider line" effect */}
+        {/* Magazine grid — 2 columns on wide, 1 on narrow */}
         <div
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "1px",
-            background: "#1a1a3a",
-            borderRadius: "16px",
-            overflow: "hidden",
-            border: "1px solid #1a1a3a",
+            display: "grid",
+            gridTemplateColumns: "repeat(2, 1fr)",
+            gap: "1rem",
           }}
         >
-          {episodes.map((episode, index) => (
+          {FEATURED_PODCASTS.map((podcast, index) => (
             <div
-              key={episode.id}
-              onClick={() => navigate(`/player/${episode.id}`)}
+              key={index}
+              onClick={() => handleFeaturedClick(podcast.rssUrl)}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "1.5rem",
-                padding: "1.25rem 1.5rem",
-                background: "#0d0d1a",
+                position: "relative",
+                borderRadius: "16px",
+                overflow: "hidden",
                 cursor: "pointer",
-                borderTop: index === 0 ? "none" : "1px solid #1a1a3a",
-                transition: "background 0.2s",
+                /* Each card is tall like a magazine tile */
+                height: "220px",
+                background: podcast.color,
+                border: "1px solid rgba(255,255,255,0.06)",
+                transition: "transform 0.2s, box-shadow 0.2s",
               }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.background = "#111128")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = "#0d0d1a")
-              }
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "scale(1.02)";
+                e.currentTarget.style.boxShadow = "0 8px 40px rgba(0,0,0,0.4)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "scale(1)";
+                e.currentTarget.style.boxShadow = "none";
+              }}
             >
-              {/* Episode number e.g. 01, 02, 03 */}
-              <span
-                style={{
-                  color: "#2a2a5a",
-                  fontSize: "0.85rem",
-                  fontFamily: "monospace",
-                  minWidth: "28px",
-                }}
-              >
-                {String(index + 1).padStart(2, "0")}
-              </span>
-
-              {/* Thumbnail */}
+              {/* Background artwork image — darkened */}
               <img
-                src={episode.image}
-                alt={episode.title}
+                src={podcast.image}
+                alt={podcast.title}
                 style={{
-                  width: "64px",
-                  height: "64px",
-                  borderRadius: "8px",
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  width: "100%",
+                  height: "100%",
                   objectFit: "cover",
-                  flexShrink: 0,
+                  opacity: 0.35 /* dark overlay effect */,
                 }}
               />
 
-              {/* Title and description */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h2
+              {/* Gradient overlay so text is readable */}
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: "70%",
+                  background:
+                    "linear-gradient(to top, rgba(0,0,0,0.9), transparent)",
+                }}
+              />
+
+              {/* Card text */}
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "1.25rem",
+                  left: "1.25rem",
+                  right: "1.25rem",
+                }}
+              >
+                <h3
                   style={{
-                    fontSize: "1rem",
-                    color: "#f5f0e8",
-                    marginBottom: "0.3rem",
+                    color: "#ffffff",
+                    fontSize: "1.1rem",
                     fontFamily: "Georgia, serif",
                     fontWeight: "normal",
+                    marginBottom: "0.4rem",
+                    textShadow: "0 1px 10px rgba(0,0,0,0.8)",
                   }}
                 >
-                  {episode.title}
-                </h2>
+                  {podcast.title}
+                </h3>
                 <p
                   style={{
-                    color: "#3a3a6a",
-                    fontSize: "0.85rem",
-                    whiteSpace: "nowrap",
+                    color: "rgba(255,255,255,0.6)",
+                    fontSize: "0.8rem",
+                    lineHeight: 1.4,
+                    /* clamp to 2 lines */
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
                     overflow: "hidden",
-                    textOverflow:
-                      "ellipsis" /* adds "..." if text is too long */,
                   }}
                 >
-                  {episode.description}
+                  {podcast.description}
                 </p>
               </div>
 
-              {/* Duration + play circle on the right */}
+              {/* Play arrow in top right corner */}
               <div
                 style={{
+                  position: "absolute",
+                  top: "1rem",
+                  right: "1rem",
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "50%",
+                  background: "rgba(232,255,71,0.15)",
+                  border: "1px solid rgba(232,255,71,0.3)",
                   display: "flex",
                   alignItems: "center",
-                  gap: "1rem",
-                  flexShrink: 0,
+                  justifyContent: "center",
+                  color: "#e8ff47",
+                  fontSize: "0.7rem",
                 }}
               >
-                <span style={{ color: "#2a2a5a", fontSize: "0.8rem" }}>
-                  {episode.duration}
-                </span>
-                <div
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    border: "1px solid #2a2a5a",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#e8ff47",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  ▶
-                </div>
+                ▶
               </div>
             </div>
           ))}
         </div>
 
-        {/* Footer */}
         <p
           style={{
             color: "#1e1e3a",

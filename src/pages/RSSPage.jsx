@@ -69,13 +69,9 @@ function RSSPage() {
 
   /* ── loadFeed ─────────────────────────────────────────────────────────────
      Core loading function.  Accepts the feed URL as a direct argument so it
-     can be called from both the button click handler AND the useEffect below
-     without any dependency on the inputUrl state value.
-
-     This separation matters because React state updates are asynchronous —
-     if we called setInputUrl(url) and then read inputUrl in the same tick,
-     we'd still see the old (empty) value.  By passing the URL in directly
-     we bypass that problem entirely.                                        */
+     can be called from the useEffect without any dependency on inputUrl state.
+     The URL always arrives via the ?url= query param — never from a typed
+     input on this page.                                                     */
   async function loadFeed(url) {
     const trimmedUrl = url.trim();
 
@@ -104,20 +100,6 @@ function RSSPage() {
       /* Always turn the spinner off whether the fetch succeeded or failed */
       setLoading(false);
     }
-  }
-
-  /* ── handleLoad ───────────────────────────────────────────────────────────
-     Thin wrapper called by the button and the Enter key handler.
-     Reads the current inputUrl state and passes it straight to loadFeed.   */
-  function handleLoad() {
-    loadFeed(inputUrl);
-  }
-
-  /* ── handleKeyDown ────────────────────────────────────────────────────────
-     Allows the user to press Enter in the input field instead of clicking
-     the button — a standard UX pattern for search/load inputs.            */
-  function handleKeyDown(e) {
-    if (e.key === "Enter") loadFeed(inputUrl);
   }
 
   /* ── useEffect: auto-load from query param ───────────────────────────────
@@ -214,122 +196,42 @@ function RSSPage() {
         </button>
       </nav>
 
-      {/* ── HERO / INPUT SECTION ── */}
-      <div style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        textAlign: "center",
-        padding: "4rem 2rem 3rem",
-        background: "radial-gradient(ellipse at 50% 0%, #1a1a4a 0%, #0d0d1a 70%)",
-      }}>
-        {/* Page heading */}
-        <h1 style={{
-          fontSize: "clamp(2rem, 5vw, 3.5rem)",
-          fontFamily: "Georgia, serif",
-          fontWeight: "bold",
-          color: "#ffffff",
-          marginBottom: "0.5rem",
-          lineHeight: 1.1,
-        }}>
-          Load a <span style={{ color: "#e8ff47" }}>Podcast</span>
-        </h1>
-
-        {/* Subtitle explaining what to do */}
-        <p style={{
-          color: "#5a5a9a",
-          fontSize: "1rem",
-          maxWidth: "480px",
-          marginBottom: "2.5rem",
-          lineHeight: 1.6,
-        }}>
-          Paste any podcast RSS feed URL below to browse and play its episodes.
-        </p>
-
-        {/* ── URL INPUT + LOAD BUTTON ── */}
+      {/* ── LOADING INDICATOR ─────────────────────────────────────────────────
+           Only visible while the CORS fetch + XML parse is in progress.
+           Centred vertically in the page with plenty of breathing room.    */}
+      {loading && (
         <div style={{
           display: "flex",
-          gap: "0.75rem",
-          width: "100%",
-          maxWidth: "620px",
-          flexWrap: "wrap",
+          alignItems: "center",
           justifyContent: "center",
+          gap: "0.75rem",
+          padding: "5rem 2rem",
         }}>
-          {/* The text input where the user pastes the RSS feed URL */}
-          <input
-            type="url"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="https://feeds.megaphone.fm/darknetdiaries"
-            disabled={loading}
-            style={{
-              flex: 1,
-              minWidth: "280px",
-              padding: "0.9rem 1.25rem",
-              background: "#12122a",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: "50px",
-              color: "#f5f0e8",
-              fontSize: "0.95rem",
-              fontFamily: "Georgia, serif",
-              outline: "none",
-              /* Dim the input while loading to signal it is not interactive */
-              opacity: loading ? 0.6 : 1,
-              transition: "border-color 0.2s",
-              boxSizing: "border-box",
-            }}
-            onFocus={(e) => (e.target.style.borderColor = "rgba(232,255,71,0.4)")}
-            onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.12)")}
-          />
-
-          {/* Load button — lime accent to match the app style */}
-          <button
-            onClick={handleLoad}
-            disabled={loading}
-            style={{
-              padding: "0.9rem 2rem",
-              background: loading ? "#3a3a1a" : "#e8ff47",
-              color: loading ? "#666" : "#0d0d1a",
-              border: "none",
-              borderRadius: "50px",
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: "0.95rem",
-              fontWeight: "bold",
-              flexShrink: 0,
-              transition: "background 0.2s, transform 0.1s",
-            }}
-            onMouseEnter={(e) => { if (!loading) e.currentTarget.style.transform = "scale(1.03)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-          >
-            {/* Change button text to indicate activity while loading */}
-            {loading ? "Loading…" : "Load Podcast"}
-          </button>
-        </div>
-
-        {/* ── LOADING INDICATOR ── */}
-        {loading && (
-          <div style={{ marginTop: "2rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            {/* CSS spinner — a rotating circle using border-trick */}
-            <div style={{
-              width: "20px",
-              height: "20px",
-              borderRadius: "50%",
-              border: "2px solid rgba(232,255,71,0.2)",
-              borderTopColor: "#e8ff47",
-              animation: "spin 0.8s linear infinite",
-            }} />
-            <span style={{ color: "#5a5a9a", fontSize: "0.9rem" }}>
-              Fetching and parsing feed…
-            </span>
-          </div>
-        )}
-
-        {/* ── ERROR MESSAGE ── */}
-        {error && (
+          {/* CSS spinner — a rotating ring using the border-trick */}
           <div style={{
-            marginTop: "1.5rem",
-            maxWidth: "560px",
+            width: "22px",
+            height: "22px",
+            borderRadius: "50%",
+            border: "2px solid rgba(232,255,71,0.2)",
+            borderTopColor: "#e8ff47",
+            animation: "spin 0.8s linear infinite",
+          }} />
+          <span style={{ color: "#5a5a9a", fontSize: "0.9rem" }}>
+            Fetching and parsing feed…
+          </span>
+        </div>
+      )}
+
+      {/* ── ERROR MESSAGE ──────────────────────────────────────────────────────
+           Shown when the fetch or XML parse failed.  Centred with the same
+           horizontal constraints used for the results section below.       */}
+      {error && (
+        <div style={{
+          maxWidth: "620px",
+          margin: "3rem auto 0",
+          padding: "0 2rem",
+        }}>
+          <div style={{
             padding: "1rem 1.5rem",
             background: "rgba(255,80,80,0.08)",
             border: "1px solid rgba(255,80,80,0.25)",
@@ -342,8 +244,82 @@ function RSSPage() {
             <br />
             {error}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* ── EMPTY STATE ────────────────────────────────────────────────────────
+           Shown on first visit when no ?url= param was supplied, or if the
+           param was empty.  Guides the user back to the home page where the
+           RSS input lives.  Not shown while loading or after an error.     */}
+      {!loading && !channel && !error && (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "6rem 2rem",
+          gap: "1rem",
+        }}>
+          {/* Microphone icon gives the empty state some visual weight */}
+          <div style={{
+            width: "72px",
+            height: "72px",
+            borderRadius: "50%",
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "1.9rem",
+            marginBottom: "0.25rem",
+          }}>
+            🎙️
+          </div>
+
+          {/* Heading */}
+          <h2 style={{
+            fontSize: "1.25rem",
+            fontFamily: "Georgia, serif",
+            color: "#f5f0e8",
+            fontWeight: "normal",
+            margin: 0,
+          }}>
+            No podcast loaded yet
+          </h2>
+
+          {/* Instruction — tells the user exactly where to go and what to do */}
+          <p style={{
+            color: "#3a3a6a",
+            fontSize: "0.95rem",
+            maxWidth: "360px",
+            lineHeight: 1.7,
+            margin: 0,
+          }}>
+            Paste a podcast RSS URL on the home page to load episodes here.
+          </p>
+
+          {/* Button pointing back to the home page where the RSS input is */}
+          <button
+            onClick={() => navigate("/")}
+            style={{
+              marginTop: "0.5rem",
+              background: "transparent",
+              border: "1px solid rgba(232,255,71,0.25)",
+              color: "#e8ff47",
+              padding: "0.6rem 1.5rem",
+              borderRadius: "20px",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              transition: "border-color 0.2s",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "rgba(232,255,71,0.6)")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "rgba(232,255,71,0.25)")}
+          >
+            ← Go to Home
+          </button>
+        </div>
+      )}
 
       {/* ── RESULTS SECTION — only shown once a feed has loaded ── */}
       {channel && (

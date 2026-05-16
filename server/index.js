@@ -158,8 +158,8 @@ app.get("/api/feed", async (req, res) => {
         title: stripHtml(getText(item, "title")) || "Untitled Episode",
         description: stripHtml(
           getText(item, "description") ||
-          (getItunesField(item, "summary") || {}).textContent ||
-          "",
+            (getItunesField(item, "summary") || {}).textContent ||
+            "",
         ),
         audioSrc,
         pubDate: formatDate(getText(item, "pubDate")),
@@ -470,6 +470,77 @@ app.post("/api/insights", async (req, res) => {
     res
       .status(500)
       .json({ error: "Insights extraction failed: " + err.message });
+  }
+});
+
+/* ── ROUTE: GET /api/search ────────────────────────────────────────────────
+   Searches for podcasts by name using Taddy's GraphQL API.
+   Returns a list of matching podcasts with title, image and RSS URL.
+
+   Usage: GET /api/search?q=freakonomics                                 */
+app.get("/api/search", async (req, res) => {
+  const { q } = req.query;
+
+  if (!q) {
+    return res.status(400).json({ error: "Missing search query parameter q." });
+  }
+
+  const TADDY_USER_ID = process.env.TADDY_USER_ID;
+  const TADDY_API_KEY = process.env.TADDY_API_KEY;
+
+  if (!TADDY_USER_ID || !TADDY_API_KEY) {
+    return res
+      .status(500)
+      .json({ error: "Taddy API credentials not set in .env file." });
+  }
+
+  console.log(`[server] Searching Taddy for: ${q}`);
+
+  try {
+    /* ── GraphQL query to search Taddy for podcasts by name ───────────────
+       We ask for uuid, name, description, imageUrl and rssUrl so we have
+       everything needed to display results and load the feed.            */
+    const searchQuery = `
+      query {
+        searchForTerm(
+          term: ${JSON.stringify(q)}
+          filterForTypes: PODCASTSERIES
+        ) {
+          podcastSeries {
+            uuid
+            name
+            description(shouldStripHtmlTags: true)
+            imageUrl
+            rssUrl
+          }
+        }
+      }
+    `;
+
+    const taddyResponse = await fetch("https://api.taddy.org", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-USER-ID": TADDY_USER_ID,
+        "X-API-KEY": TADDY_API_KEY,
+      },
+      body: JSON.stringify({ query: searchQuery }),
+    });
+
+    if (!taddyResponse.ok) {
+      throw new Error(`Taddy returned HTTP ${taddyResponse.status}`);
+    }
+
+    const taddyData = await taddyResponse.json();
+    const podcasts = taddyData?.data?.searchForTerm?.podcastSeries || [];
+
+    console.log(`[server] Taddy found ${podcasts.length} podcasts for "${q}"`);
+
+    /* Return the podcast list to the frontend */
+    res.json({ podcasts });
+  } catch (err) {
+    console.error("[server] Search error:", err.message);
+    res.status(502).json({ error: "Search failed: " + err.message });
   }
 });
 

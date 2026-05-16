@@ -504,8 +504,9 @@ app.get("/api/search", async (req, res) => {
       query {
         searchForTerm(
           term: ${JSON.stringify(q)}
-          filterForTypes: PODCASTSERIES
+          filterForTypes: [PODCASTSERIES]
         ) {
+          searchId
           podcastSeries {
             uuid
             name

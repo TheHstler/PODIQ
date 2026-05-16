@@ -116,7 +116,6 @@ function PlayerPage() {
      Calls our Express backend which sends audio to Hugging Face Whisper.
      Once transcript is back, automatically generates insights too.       */
   async function handleTranscribe() {
-    console.log("Audio URL being sent:", episode.audioSrc);
     setIsTranscribing(true);
     setTranscribeError("");
 

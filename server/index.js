@@ -25,7 +25,7 @@ const HF_API_KEY = process.env.HF_API_KEY;
 const WHISPER_URL =
   "https://api-inference.huggingface.co/models/openai/whisper-small";
 const INSIGHTS_URL =
-  "https://router.huggingface.co/hf-inference/models/google/flan-t5-large";
+  "https://api-inference.huggingface.co/models/google/flan-t5-large";
 
 /* ── MIDDLEWARE ────────────────────────────────────────────────────────────*/
 app.use(cors());
@@ -194,6 +194,12 @@ app.get("/api/feed", async (req, res) => {
    For a student demo this is clearly labelled as a preview.
 
    Usage: POST /api/transcribe with body { audioUrl: "https://..." }     */
+/* ── ROUTE: POST /api/transcribe ───────────────────────────────────────────
+   Uses AssemblyAI to transcribe podcast audio.
+   AssemblyAI accepts a public audio URL directly — no need to download
+   the file ourselves. It returns real word-level timestamps.
+
+   Usage: POST /api/transcribe with body { audioUrl: "https://..." }     */
 app.post("/api/transcribe", async (req, res) => {
   const { audioUrl } = req.body;
 
@@ -201,95 +207,105 @@ app.post("/api/transcribe", async (req, res) => {
     return res.status(400).json({ error: "Missing audioUrl in request body." });
   }
 
-  if (!HF_API_KEY) {
-    return res.status(500).json({ error: "HF_API_KEY not set in .env file." });
-  }
-
-  console.log(`[server] Transcribing audio from: ${audioUrl}`);
-
-  /* ── STEP 1: Download the audio file from the podcast URL ──────────────
-     We fetch the raw audio bytes so we can send them to Whisper.        */
-  let audioBuffer;
-  try {
-    const audioResponse = await fetch(audioUrl, {
-      headers: { "User-Agent": "PodPlayer/1.0" },
-    });
-    if (!audioResponse.ok) throw new Error(`HTTP ${audioResponse.status}`);
-
-    /* Download audio but cap at 1MB to avoid timeout on free tier.
-   This gives roughly 60 seconds of audio for Whisper to transcribe. */
-    audioBuffer = await audioResponse.buffer();
-    const MAX_BYTES = 1 * 1024 * 1024; /* 1MB limit */
-    if (audioBuffer.length > MAX_BYTES) {
-      audioBuffer = audioBuffer.slice(0, MAX_BYTES);
-      console.log(`[server] Audio capped at 1MB for free tier compatibility`);
-    }
-    console.log(`[server] Sending ${audioBuffer.length} bytes to Whisper`);
-  } catch (err) {
-    console.error("[server] Audio download error:", err.message);
+  const ASSEMBLYAI_KEY = process.env.ASSEMBLYAI_API_KEY;
+  if (!ASSEMBLYAI_KEY) {
     return res
-      .status(502)
-      .json({ error: "Could not download audio: " + err.message });
+      .status(500)
+      .json({ error: "ASSEMBLYAI_API_KEY not set in .env file." });
   }
 
-  /* ── STEP 2: Send audio to Hugging Face Whisper API ────────────────────
-     We send the raw audio bytes directly to the Whisper model endpoint.
-     Whisper returns a JSON object with a "text" field containing the
-     full transcript as a plain string.                                   */
-  let transcript;
+  console.log(`[server] Transcribing with AssemblyAI: ${audioUrl}`);
+
   try {
-    const hfResponse = await fetch(WHISPER_URL, {
-      method: "POST",
-      headers: {
-        /* Our API key for authentication */
-        Authorization: `Bearer ${HF_API_KEY}`,
-        "Content-Type": "audio/mpeg",
+    /* ── STEP 1: Submit the audio URL to AssemblyAI ──────────────────────
+       AssemblyAI fetches the audio directly from the URL — we just tell
+       it where the file is and it does the rest.                         */
+    const submitResponse = await fetch(
+      "https://api.assemblyai.com/v2/transcript",
+      {
+        method: "POST",
+        headers: {
+          Authorization: ASSEMBLYAI_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          audio_url: audioUrl,
+          /* speech_model is now required by AssemblyAI's updated API */
+          speech_models: ["universal-2"],
+          /* Only transcribe first 3 minutes for the demo */
+          audio_end_at: 180000,
+        }),
       },
-      /* Send the raw audio bytes as the request body */
-      body: audioBuffer,
-    });
+    );
 
-    if (!hfResponse.ok) {
-      const errText = await hfResponse.text();
-      throw new Error(`Whisper API returned ${hfResponse.status}: ${errText}`);
+    if (!submitResponse.ok) {
+      const err = await submitResponse.text();
+      throw new Error(`AssemblyAI submit failed: ${err}`);
     }
 
-    const result = await hfResponse.json();
-    transcript = result.text || "";
-    console.log(
-      `[server] Transcription complete — ${transcript.length} characters`,
+    const submitData = await submitResponse.json();
+    const transcriptId = submitData.id;
+    console.log(`[server] AssemblyAI job submitted, id: ${transcriptId}`);
+
+    /* ── STEP 2: Poll until transcription is complete ────────────────────
+       AssemblyAI processes async — we check every 3 seconds until done. */
+    let transcriptData;
+    let attempts = 0;
+    const maxAttempts = 40; /* max 2 minutes of polling */
+
+    while (attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 3000)); /* wait 3s */
+
+      const pollResponse = await fetch(
+        `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
+        { headers: { Authorization: ASSEMBLYAI_KEY } },
+      );
+
+      transcriptData = await pollResponse.json();
+      console.log(`[server] AssemblyAI status: ${transcriptData.status}`);
+
+      if (transcriptData.status === "completed") break;
+      if (transcriptData.status === "error") {
+        throw new Error(
+          "AssemblyAI transcription error: " + transcriptData.error,
+        );
+      }
+
+      attempts++;
+    }
+
+    if (!transcriptData || transcriptData.status !== "completed") {
+      throw new Error("Transcription timed out — try a shorter episode.");
+    }
+
+    /* ── STEP 3: Convert AssemblyAI sentences into transcript lines ──────
+       AssemblyAI returns sentences with real start times in milliseconds.
+       We convert to seconds for our player.                              */
+    const sentencesResponse = await fetch(
+      `https://api.assemblyai.com/v2/transcript/${transcriptId}/sentences`,
+      { headers: { Authorization: ASSEMBLYAI_KEY } },
     );
-  } catch (err) {
-    console.error("[server] Whisper API error:", err.message);
-    return res
-      .status(502)
-      .json({ error: "Transcription failed: " + err.message });
-  }
+    const sentencesData = await sentencesResponse.json();
 
-  /* ── STEP 3: Split transcript into timestamped chunks ──────────────────
-     Whisper returns one big text string. We split it into chunks of
-     roughly 15 words each and assign an estimated timestamp to each one.
-     This gives us the clickable transcript lines the player page expects.*/
-  const words = transcript.split(" ").filter(Boolean);
-  const chunkSize = 15; /* words per transcript line */
-  const transcriptLines = [];
+    /* Map each sentence to the format our player expects */
+    const transcriptLines = (sentencesData.sentences || []).map((sentence) => ({
+      time: Math.floor(sentence.start / 1000) /* ms to seconds */,
+      text: sentence.text,
+    }));
 
-  for (let i = 0; i < words.length; i += chunkSize) {
-    const chunk = words.slice(i, i + chunkSize).join(" ");
-    /* Estimate timestamp: assume average speaking pace of ~2.5 words/sec */
-    const estimatedSeconds = Math.floor(i / 2.5);
-    transcriptLines.push({
-      time: estimatedSeconds,
-      text: chunk,
+    console.log(
+      `[server] Transcription complete — ${transcriptLines.length} lines`,
+    );
+
+    res.json({
+      transcript: transcriptLines,
+      fullText: transcriptData.text || "",
+      isPreview: true,
     });
+  } catch (err) {
+    console.error("[server] Transcription error:", err.message);
+    res.status(502).json({ error: "Transcription failed: " + err.message });
   }
-
-  /* Return the transcript lines and the raw full text */
-  res.json({
-    transcript: transcriptLines,
-    fullText: transcript,
-    isPreview: true /* flag so frontend can show "preview" label */,
-  });
 });
 
 /* ── ROUTE: POST /api/insights ─────────────────────────────────────────────

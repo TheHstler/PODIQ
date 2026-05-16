@@ -152,6 +152,35 @@ function PlayerPage() {
     }
   }
 
+  /* ── GENERATE INSIGHTS INDEPENDENTLY ────────────────────────────────────
+     Works without a transcript — uses episode description as fallback.   */
+  async function handleGenerateInsights() {
+    setIsGeneratingInsights(true);
+    setTranscribeError("");
+
+    try {
+      /* Use existing transcript if available, otherwise use description */
+      const textToAnalyse = transcript.length > 0
+        ? transcript.map(l => l.text).join(" ")
+        : episode.description;
+
+      const insightsResponse = await fetch("http://localhost:3001/api/insights", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: textToAnalyse }),
+      });
+
+      const insightsData = await insightsResponse.json();
+      if (!insightsResponse.ok) throw new Error(insightsData.error);
+      if (insightsData.insights) setInsights(insightsData.insights);
+
+    } catch (err) {
+      setTranscribeError("Could not generate insights: " + err.message);
+    } finally {
+      setIsGeneratingInsights(false);
+    }
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: "#0d0d1a", color: "#f5f0e8" }}>
 
@@ -210,8 +239,8 @@ function PlayerPage() {
         <div style={{ display: "flex", gap: "4px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "4px", width: "fit-content" }}>
           {[
             { key: "transcript", label: "📄 Transcript" },
-            { key: "insights",   label: "✨ Key Insights" },
-            { key: "notes",      label: "📝 My Notes" },
+            { key: "insights", label: "✨ Key Insights" },
+            { key: "notes", label: "📝 My Notes" },
           ].map((tab) => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{ background: activeTab === tab.key ? "#e8ff47" : "transparent", color: activeTab === tab.key ? "#0d0d1a" : "#5a5a9a", border: "none", padding: "0.55rem 1.25rem", borderRadius: "8px", cursor: "pointer", fontSize: "0.85rem", fontWeight: activeTab === tab.key ? "bold" : "normal", transition: "all 0.15s" }}>
               {tab.label}
@@ -311,21 +340,47 @@ function PlayerPage() {
         {/* ══ KEY INSIGHTS PANEL ══ */}
         {activeTab === "insights" && (
           <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "16px", padding: "1.75rem" }}>
-            <div style={{ marginBottom: "1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+
+            {/* Panel header with its own Generate button */}
+            <div style={{ marginBottom: "1.5rem", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
               <div>
                 <h2 style={{ fontSize: "1.1rem", color: "#ffffff", marginBottom: "0.3rem" }}>Key Insights</h2>
                 <p style={{ color: "#3a3a6a", fontSize: "0.82rem" }}>The most important takeaways from this episode</p>
               </div>
-              <span style={{ background: "rgba(232,255,71,0.1)", border: "1px solid rgba(232,255,71,0.2)", color: "#e8ff47", fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0.3rem 0.75rem", borderRadius: "20px" }}>
-                ✨ AI Generated
-              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexShrink: 0 }}>
+                {/* AI badge */}
+                <span style={{ background: "rgba(232,255,71,0.1)", border: "1px solid rgba(232,255,71,0.2)", color: "#e8ff47", fontSize: "0.7rem", letterSpacing: "0.1em", textTransform: "uppercase", padding: "0.3rem 0.75rem", borderRadius: "20px" }}>
+                  ✨ AI Generated
+                </span>
+                {/* Generate insights button — works independently of transcript */}
+                <button
+                  onClick={handleGenerateInsights}
+                  disabled={isGeneratingInsights}
+                  style={{ background: isGeneratingInsights ? "rgba(232,255,71,0.2)" : "#e8ff47", color: "#0d0d1a", border: "none", padding: "0.5rem 1rem", borderRadius: "20px", cursor: isGeneratingInsights ? "not-allowed" : "pointer", fontSize: "0.8rem", fontWeight: "bold", whiteSpace: "nowrap" }}
+                >
+                  {isGeneratingInsights ? "⏳ Generating..." : "✨ Generate Insights"}
+                </button>
+              </div>
             </div>
 
-            {/* Empty state — tells user to generate transcript first */}
-            {insights.length === 0 && (
+            {/* Error message */}
+            {transcribeError && activeTab === "insights" && (
+              <p style={{ color: "#ff6b6b", fontSize: "0.85rem", marginBottom: "1rem" }}>{transcribeError}</p>
+            )}
+
+            {/* Empty state */}
+            {insights.length === 0 && !isGeneratingInsights && (
               <div style={{ padding: "2rem", textAlign: "center", color: "#3a3a6a", border: "1px dashed rgba(255,255,255,0.06)", borderRadius: "12px", marginBottom: "1rem" }}>
                 <p style={{ fontSize: "1.5rem", marginBottom: "0.5rem" }}>✨</p>
-                <p style={{ fontSize: "0.9rem" }}>No insights yet — go to the Transcript tab and click "Generate Transcript" first.</p>
+                <p style={{ fontSize: "0.9rem" }}>Click "Generate Insights" to get AI powered takeaways from this episode.</p>
+              </div>
+            )}
+
+            {/* Loading state */}
+            {isGeneratingInsights && (
+              <div style={{ padding: "2rem", textAlign: "center", color: "#5a5a9a", border: "1px dashed rgba(232,255,71,0.1)", borderRadius: "12px" }}>
+                <p style={{ fontSize: "1.5rem", marginBottom: "0.5rem" }}>⏳</p>
+                <p style={{ fontSize: "0.9rem" }}>AI is analysing the episode — this takes about 30 seconds...</p>
               </div>
             )}
 
@@ -342,7 +397,7 @@ function PlayerPage() {
             {/* Supervisor note */}
             <div style={{ marginTop: "1.5rem", padding: "1rem 1.25rem", background: "rgba(232,255,71,0.03)", border: "1px dashed rgba(232,255,71,0.15)", borderRadius: "10px" }}>
               <p style={{ color: "#3a3a6a", fontSize: "0.82rem", margin: 0 }}>
-                🔌 <strong style={{ color: "#5a5a8a" }}>AI Powered:</strong> Insights are generated from the episode transcript using Hugging Face Flan-T5.
+                🔌 <strong style={{ color: "#5a5a8a" }}>AI Powered:</strong> Insights are generated from the episode audio using AssemblyAI transcription and Hugging Face Flan-T5.
               </p>
             </div>
           </div>

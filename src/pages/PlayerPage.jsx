@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import episodes from "../data/episodes";
 
 function PlayerPage() {
@@ -23,6 +23,11 @@ function PlayerPage() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcribeError, setTranscribeError] = useState("");
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+  const [activeInsight, setActiveInsight] = useState(null);
+  /* Controls whether transcript is expanded or collapsed */
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  /* Tracks if auto-load has already run so it doesn't repeat */
+  const [autoLoaded, setAutoLoaded] = useState(false);
 
   if (!episode) {
     return (
@@ -124,7 +129,10 @@ function PlayerPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: data.fullText }),
+          body: JSON.stringify({
+            transcript: data.fullText,
+            lines: data.transcript /* pass timestamped lines to Claude */,
+          }),
         },
       );
       const insightsData = await insightsResponse.json();
@@ -138,22 +146,34 @@ function PlayerPage() {
     }
   }
 
+  /* ── GENERATE INSIGHTS VIA CLAUDE ───────────────────────────────────────
+   Sends the full transcript with timestamps to our backend which calls
+   Claude API. Returns structured JSON insights with timestamps so we
+   can place them on the audio timeline.                                */
   async function handleGenerateInsights() {
     setIsGeneratingInsights(true);
     setTranscribeError("");
+
     try {
+      /* Send both the full text and the timestamped lines */
       const textToAnalyse =
         transcript.length > 0
           ? transcript.map((l) => l.text).join(" ")
           : episode.description;
+
       const insightsResponse = await fetch(
         "http://localhost:3001/api/insights",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: textToAnalyse }),
+          body: JSON.stringify({
+            transcript: textToAnalyse,
+            /* Send timestamped lines so Claude knows when each entity appears */
+            lines: transcript.length > 0 ? transcript : [],
+          }),
         },
       );
+
       const insightsData = await insightsResponse.json();
       if (!insightsResponse.ok) throw new Error(insightsData.error);
       if (insightsData.insights) setInsights(insightsData.insights);
@@ -163,6 +183,22 @@ function PlayerPage() {
       setIsGeneratingInsights(false);
     }
   }
+
+  /* ── AUTO GENERATE ON LOAD ───────────────────────────────────────────────
+     When the player page opens, automatically generate the transcript and
+     insights in the background so the user doesn't have to click anything.
+     Only runs once per episode load.                                       */
+  useEffect(() => {
+    if (autoLoaded) return; /* don't run twice */
+    if (!episode?.audioSrc) return; /* no audio to transcribe */
+    if (transcript.length > 0) return; /* already have transcript */
+
+    setAutoLoaded(true);
+    /* Small delay so the page renders first before heavy work starts */
+    setTimeout(() => {
+      handleTranscribe();
+    }, 1000);
+  }, [episode]);
 
   return (
     <div
@@ -410,6 +446,167 @@ function PlayerPage() {
         </div>
       </div>
 
+      {/* ── INSIGHT TIMELINE ─────────────────────────────────────────────────────
+    Shows a progress bar with dots at timestamps where insights occur.
+    Clicking a dot jumps the audio to that point and shows the insight.  */}
+      {insights.length > 0 && (
+        <div
+          style={{
+            maxWidth: "860px",
+            margin: "0 auto",
+            padding: "0 2rem 1.5rem",
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: "16px",
+              padding: "1.25rem 1.5rem",
+              border: "1px solid #ebebeb",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
+            }}
+          >
+            <p
+              style={{
+                color: "#aaa",
+                fontSize: "0.72rem",
+                fontWeight: "700",
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                marginBottom: "1rem",
+              }}
+            >
+              Knowledge Timeline
+            </p>
+
+            {/* Timeline bar with dots */}
+            <div
+              style={{
+                position: "relative",
+                height: "32px",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              {/* Background track */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  height: "3px",
+                  background: "#f0f0f0",
+                  borderRadius: "2px",
+                }}
+              />
+
+              {/* Insight dots */}
+              {insights.map((insight, index) => {
+                /* Calculate position as percentage of total audio duration */
+                const duration = audioRef.current?.duration || 180;
+                const position = Math.min(
+                  (insight.timestamp / duration) * 100,
+                  98,
+                );
+
+                /* Colour by entity type */
+                const typeColors = {
+                  person: "#6c47ff",
+                  book: "#e67e22",
+                  film: "#e74c3c",
+                  show: "#e74c3c",
+                  place: "#27ae60",
+                  company: "#2980b9",
+                  concept: "#8e44ad",
+                };
+                const dotColor = typeColors[insight.type] || "#6c47ff";
+
+                return (
+                  <div
+                    key={index}
+                    onClick={() => {
+                      handleTimestampClick(insight.timestamp);
+                      setActiveInsight(insight);
+                    }}
+                    title={insight.name}
+                    style={{
+                      position: "absolute",
+                      left: `${position}%`,
+                      width: "12px",
+                      height: "12px",
+                      borderRadius: "50%",
+                      background: dotColor,
+                      border: "2px solid #fff",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                      cursor: "pointer",
+                      transform: "translateX(-50%)",
+                      transition: "transform 0.15s",
+                      zIndex: 10,
+                    }}
+                    onMouseEnter={(e) =>
+                    (e.currentTarget.style.transform =
+                      "translateX(-50%) scale(1.4)")
+                    }
+                    onMouseLeave={(e) =>
+                    (e.currentTarget.style.transform =
+                      "translateX(-50%) scale(1)")
+                    }
+                  />
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div
+              style={{
+                display: "flex",
+                gap: "1rem",
+                flexWrap: "wrap",
+                marginTop: "0.75rem",
+              }}
+            >
+              {[...new Set(insights.map((i) => i.type))].map((type) => (
+                <div
+                  key={type}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      background:
+                        {
+                          person: "#6c47ff",
+                          book: "#e67e22",
+                          film: "#e74c3c",
+                          show: "#e74c3c",
+                          place: "#27ae60",
+                          company: "#2980b9",
+                          concept: "#8e44ad",
+                        }[type] || "#6c47ff",
+                    }}
+                  />
+                  <span
+                    style={{
+                      color: "#aaa",
+                      fontSize: "0.72rem",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    {type}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TABS ── */}
       <div
         style={{ maxWidth: "860px", margin: "0 auto", padding: "0 2rem 1rem" }}
@@ -467,48 +664,37 @@ function PlayerPage() {
               boxShadow: "0 2px 12px rgba(0,0,0,0.04)",
             }}
           >
+            {/* Transcript header — clicking toggles expand/collapse */}
             <div
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                marginBottom: "1.5rem",
-              }}
+              onClick={() => setTranscriptExpanded(!transcriptExpanded)}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: transcriptExpanded ? "1.5rem" : "0", cursor: "pointer" }}
             >
               <div>
-                <h2
-                  style={{
-                    fontSize: "1rem",
-                    fontWeight: "700",
-                    color: "#1a1a2e",
-                    marginBottom: "0.2rem",
-                  }}
-                >
+                <h2 style={{ fontSize: "1rem", fontWeight: "700", color: "#1a1a2e", marginBottom: "0.2rem" }}>
                   Transcript
+                  {isTranscribing && (
+                    <span style={{ color: "#6c47ff", fontSize: "0.75rem", fontWeight: "400", marginLeft: "0.75rem" }}>
+                      Generating...
+                    </span>
+                  )}
+                  {transcript.length > 0 && !isTranscribing && (
+                    <span style={{ color: "#aaa", fontSize: "0.75rem", fontWeight: "400", marginLeft: "0.75rem" }}>
+                      {transcript.length} lines
+                    </span>
+                  )}
                 </h2>
                 <p style={{ color: "#bbb", fontSize: "0.8rem" }}>
-                  Click any line to jump there — bookmark with the flag icon
+                  {transcriptExpanded ? "Click to collapse" : "Click to expand — bookmark moments with the flag icon"}
                 </p>
               </div>
-              {transcript.length === 0 && (
-                <button
-                  onClick={handleTranscribe}
-                  disabled={isTranscribing}
-                  style={{
-                    background: isTranscribing ? "#f0edff" : "#6c47ff",
-                    color: isTranscribing ? "#6c47ff" : "#fff",
-                    border: "none",
-                    padding: "0.5rem 1.1rem",
-                    borderRadius: "8px",
-                    cursor: isTranscribing ? "not-allowed" : "pointer",
-                    fontSize: "0.8rem",
-                    fontWeight: "600",
-                    flexShrink: 0,
-                  }}
-                >
-                  {isTranscribing ? "Generating..." : "Generate Transcript"}
-                </button>
-              )}
+              {/* Chevron icon — rotates when expanded */}
+              <svg
+                width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="#aaa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: transcriptExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", flexShrink: 0 }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
             </div>
 
             {transcribeError && (
@@ -683,9 +869,9 @@ function PlayerPage() {
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
                   onMouseLeave={(e) =>
-                    (e.currentTarget.style.opacity = isMarked(line)
-                      ? "1"
-                      : "0.2")
+                  (e.currentTarget.style.opacity = isMarked(line)
+                    ? "1"
+                    : "0.2")
                   }
                 >
                   <svg
@@ -808,19 +994,190 @@ function PlayerPage() {
               </div>
             )}
 
+            {/* Active insight card — shown when user clicks a timeline dot */}
+            {activeInsight && (
+              <div
+                style={{
+                  background: "#f8f7ff",
+                  border: "1px solid #c4b5fd",
+                  borderRadius: "12px",
+                  padding: "1.25rem",
+                  marginBottom: "1rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    marginBottom: "0.6rem",
+                  }}
+                >
+                  <span
+                    style={{
+                      background: "#6c47ff",
+                      color: "#fff",
+                      fontSize: "0.65rem",
+                      fontWeight: "700",
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      padding: "0.2rem 0.6rem",
+                      borderRadius: "20px",
+                    }}
+                  >
+                    {activeInsight.type}
+                  </span>
+                  <span style={{ color: "#aaa", fontSize: "0.72rem" }}>
+                    @ {formatTime(activeInsight.timestamp)}
+                  </span>
+                </div>
+                <h3
+                  style={{
+                    fontSize: "1rem",
+                    fontWeight: "700",
+                    color: "#1a1a2e",
+                    marginBottom: "0.4rem",
+                  }}
+                >
+                  {activeInsight.name}
+                </h3>
+                <p
+                  style={{
+                    color: "#555",
+                    fontSize: "0.85rem",
+                    lineHeight: 1.5,
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  {activeInsight.description}
+                </p>
+                <p
+                  style={{
+                    color: "#888",
+                    fontSize: "0.78rem",
+                    fontStyle: "italic",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  {activeInsight.relevance}
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.4rem",
+                  }}
+                >
+                  <a
+                    href={activeInsight.links?.wikipedia}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      background: "#fff",
+                      borderRadius: "8px",
+                      color: "#6c47ff",
+                      fontSize: "0.8rem",
+                      fontWeight: "600",
+                      textDecoration: "none",
+                      border: "1px solid #e0d9ff",
+                    }}
+                  >
+                    Open Wikipedia →
+                  </a>
+                  {(activeInsight.type === "film" ||
+                    activeInsight.type === "show") && (
+                      <a
+                        href={activeInsight.links?.imdb}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          padding: "0.5rem 0.75rem",
+                          background: "#fff",
+                          borderRadius: "8px",
+                          color: "#888",
+                          fontSize: "0.8rem",
+                          textDecoration: "none",
+                          border: "1px solid #ebebeb",
+                        }}
+                      >
+                        Search IMDb →
+                      </a>
+                    )}
+                  {activeInsight.type === "book" && (
+                    <a
+                      href={activeInsight.links?.amazon}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        padding: "0.5rem 0.75rem",
+                        background: "#fff",
+                        borderRadius: "8px",
+                        color: "#888",
+                        fontSize: "0.8rem",
+                        textDecoration: "none",
+                        border: "1px solid #ebebeb",
+                      }}
+                    >
+                      Find on Amazon →
+                    </a>
+                  )}
+                  <button
+                    onClick={() =>
+                      handleTimestampClick(activeInsight.timestamp)
+                    }
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      background: "none",
+                      border: "1px solid #ebebeb",
+                      borderRadius: "8px",
+                      color: "#aaa",
+                      fontSize: "0.78rem",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    Jump to {formatTime(activeInsight.timestamp)} in audio
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* All insights as a list */}
             {insights.map((insight, index) => (
               <div
                 key={index}
+                onClick={() => {
+                  setActiveInsight(insight);
+                  handleTimestampClick(insight.timestamp);
+                }}
                 style={{
                   display: "flex",
                   gap: "1rem",
                   alignItems: "flex-start",
-                  padding: "1.1rem 1.25rem",
+                  padding: "1rem 1.25rem",
                   marginBottom: "0.5rem",
-                  background: "#fafafa",
-                  border: "1px solid #f0f0f0",
+                  background:
+                    activeInsight?.name === insight.name
+                      ? "#f0edff"
+                      : "#fafafa",
+                  border:
+                    activeInsight?.name === insight.name
+                      ? "1px solid #c4b5fd"
+                      : "1px solid #f0f0f0",
                   borderRadius: "10px",
+                  cursor: "pointer",
+                  transition: "all 0.15s",
                 }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "#f8f7ff")
+                }
+                onMouseLeave={(e) =>
+                (e.currentTarget.style.background =
+                  activeInsight?.name === insight.name
+                    ? "#f0edff"
+                    : "#fafafa")
+                }
               >
                 <div
                   style={{
@@ -839,16 +1196,41 @@ function PlayerPage() {
                 >
                   {index + 1}
                 </div>
-                <p
-                  style={{
-                    color: "#444",
-                    fontSize: "0.92rem",
-                    margin: 0,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {insight}
-                </p>
+                <div style={{ minWidth: 0 }}>
+                  <p
+                    style={{
+                      color: "#1a1a2e",
+                      fontSize: "0.92rem",
+                      fontWeight: "600",
+                      marginBottom: "0.2rem",
+                    }}
+                  >
+                    {insight.name}
+                    <span
+                      style={{
+                        color: "#aaa",
+                        fontSize: "0.75rem",
+                        fontWeight: "400",
+                        marginLeft: "0.5rem",
+                      }}
+                    >
+                      {insight.type} · {formatTime(insight.timestamp)}
+                    </span>
+                  </p>
+                  <p
+                    style={{
+                      color: "#888",
+                      fontSize: "0.82rem",
+                      margin: 0,
+                      lineHeight: 1.4,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {insight.description}
+                  </p>
+                </div>
               </div>
             ))}
 

@@ -158,8 +158,8 @@ app.get("/api/feed", async (req, res) => {
         title: stripHtml(getText(item, "title")) || "Untitled Episode",
         description: stripHtml(
           getText(item, "description") ||
-            (getItunesField(item, "summary") || {}).textContent ||
-            "",
+          (getItunesField(item, "summary") || {}).textContent ||
+          "",
         ),
         audioSrc,
         pubDate: formatDate(getText(item, "pubDate")),
@@ -369,107 +369,105 @@ app.post("/api/transcribe", async (req, res) => {
 });
 
 /* ── ROUTE: POST /api/insights ─────────────────────────────────────────────
-   Extracts key insights from a transcript using smart sentence scoring.
-   No external AI API needed — works instantly and reliably every time.
-   Scores sentences by length, keyword presence and position in the text.
+   Sends the full transcript to Claude API which returns structured JSON
+   insights with timestamps. Each insight includes the entity name, type,
+   description, timestamp where it's mentioned, and links for Wikipedia,
+   Amazon and IMDb.
 
-   Usage: POST /api/insights with body { transcript: "full text here" }  */
+   Usage: POST /api/insights with body { transcript: "full text", 
+                                         lines: [{ time, text }] }       */
 app.post("/api/insights", async (req, res) => {
-  const { transcript } = req.body;
+  const { transcript, lines } = req.body;
 
   if (!transcript) {
-    return res
-      .status(400)
-      .json({ error: "Missing transcript in request body." });
+    return res.status(400).json({ error: "Missing transcript in request body." });
   }
 
-  console.log("[server] Extracting insights from transcript...");
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) {
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in .env file." });
+  }
+
+  console.log("[server] Generating insights with Claude...");
 
   try {
-    /* ── STEP 1: Split into sentences ──────────────────────────────────────
-       Split on punctuation and filter out very short sentences.          */
-    const sentences = transcript
-      .split(/[.!?]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 40);
+    /* ── STEP 1: Initialise the Anthropic SDK ──────────────────────────── */
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
 
-    if (sentences.length === 0) {
-      return res.json({
-        insights: [
-          "No insights could be extracted — transcript may be too short.",
-        ],
-      });
-    }
+    /* ── STEP 2: Build the transcript with timestamps ──────────────────────
+       We send the transcript lines with their timestamps so Claude can
+       accurately pinpoint where each entity is mentioned.               */
+    const transcriptWithTimestamps = (lines || [])
+      .map(line => `[${line.time}s] ${line.text}`)
+      .join("\n");
 
-    /* ── STEP 2: Score each sentence by importance ─────────────────────────
-       Keywords that signal important content score higher.               */
-    const keywords = [
-      "important",
-      "key",
-      "significant",
-      "main",
-      "critical",
-      "essential",
-      "discovered",
-      "found",
-      "revealed",
-      "shows",
-      "proves",
-      "means",
-      "because",
-      "therefore",
-      "result",
-      "conclusion",
-      "actually",
-      "surprising",
-      "problem",
-      "solution",
-      "believe",
-      "think",
-      "learn",
-      "never",
-      "always",
-      "every",
-      "most",
-      "first",
-      "biggest",
-      "real",
-    ];
+    /* ── STEP 3: Build the prompt ──────────────────────────────────────────
+       We tell Claude exactly what JSON structure to return so we can
+       parse it reliably. We ask for timestamps so we can place dots
+       on the audio timeline at exactly the right position.              */
+    const prompt = `You are analyzing a podcast transcript. Extract the most interesting and important entities mentioned — people, books, films, TV shows, places, companies, or concepts.
 
-    const scored = sentences.map((sentence, index) => {
-      let score = 0;
+For each entity return a JSON array. Each item must have:
+- "timestamp": the number of seconds (from the [Xs] markers) where this entity is first mentioned
+- "type": one of "person", "book", "film", "show", "place", "company", "concept"  
+- "name": the entity name as mentioned
+- "description": 1-2 sentences explaining who/what this is and why it's relevant to the podcast
+- "wikipedia": the Wikipedia page title for this entity (just the title, no URL)
+- "amazon": a good search query to find this on Amazon (for books especially)
+- "imdb": a good search query to find this on IMDb (for films and shows)
+- "relevance": one sentence on why this was mentioned in the podcast
 
-      /* Longer sentences tend to carry more information */
-      score += Math.min(sentence.length / 20, 5);
+Return ONLY a valid JSON array. No markdown, no explanation, no backticks. Just the raw JSON array starting with [ and ending with ].
 
-      /* Sentences containing important keywords score higher */
-      keywords.forEach((kw) => {
-        if (sentence.toLowerCase().includes(kw)) score += 2;
-      });
+Transcript:
+${transcriptWithTimestamps}
 
-      /* Sentences near the start and middle are often most important */
-      const position = index / sentences.length;
-      if (position < 0.2 || (position > 0.4 && position < 0.6)) score += 2;
+Return the top 8 most interesting entities maximum.`;
 
-      return { sentence, score };
+    /* ── STEP 4: Call Claude API ───────────────────────────────────────────
+       We use claude-3-haiku which is the fastest and cheapest model —
+       perfect for structured data extraction like this.                 */
+    const message = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
     });
 
-    /* ── STEP 3: Return top 4 highest scoring sentences as insights ────────
-       Sort by score and take the best 4.                                 */
-    const topInsights = scored
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 4)
-      .map((item) => item.sentence + ".");
+    /* ── STEP 5: Parse the JSON response ───────────────────────────────────
+       Claude returns a text block — we parse it as JSON.               */
+    const rawText = message.content[0]?.text || "[]";
+    console.log("[server] Claude raw response:", rawText.slice(0, 200));
 
-    console.log(
-      `[server] Extracted ${topInsights.length} insights successfully`,
-    );
-    res.json({ insights: topInsights });
+    let insights = [];
+    try {
+      /* Strip any accidental markdown backticks just in case */
+      const cleaned = rawText.replace(/```json|```/g, "").trim();
+      insights = JSON.parse(cleaned);
+    } catch (parseErr) {
+      console.error("[server] Failed to parse Claude JSON:", parseErr.message);
+      insights = [];
+    }
+
+    /* ── STEP 6: Add full URLs to each insight ─────────────────────────────
+       Convert the search terms into actual clickable links.            */
+    insights = insights.map(insight => ({
+      ...insight,
+      links: {
+        wikipedia: insight.wikipedia
+          ? `https://en.wikipedia.org/wiki/${encodeURIComponent(insight.wikipedia.replace(/ /g, "_"))}`
+          : `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(insight.name)}`,
+        amazon: `https://www.amazon.co.uk/s?k=${encodeURIComponent(insight.amazon || insight.name)}`,
+        imdb: `https://www.imdb.com/find?q=${encodeURIComponent(insight.imdb || insight.name)}`,
+      }
+    }));
+
+    console.log(`[server] Claude returned ${insights.length} insights`);
+    res.json({ insights });
+
   } catch (err) {
-    console.error("[server] Insights error:", err.message);
-    res
-      .status(500)
-      .json({ error: "Insights extraction failed: " + err.message });
+    console.error("[server] Claude API error:", err.message);
+    res.status(502).json({ error: "Insights generation failed: " + err.message });
   }
 });
 

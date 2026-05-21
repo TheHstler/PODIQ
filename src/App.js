@@ -3,6 +3,7 @@ import EpisodeList from "./pages/EpisodeList";
 import PlayerPage from "./pages/PlayerPage";
 /* RSSPage lets users load any podcast by pasting its RSS feed URL */
 import RSSPage from "./pages/RSSPage";
+import NotesLibrary from "./pages/NotesLibrary";
 
 function App() {
   return (
@@ -16,6 +17,8 @@ function App() {
 
         {/* RSS loader — paste a feed URL to browse any podcast */}
         <Route path="/rss" element={<RSSPage />} />
+
+        <Route path="/notes" element={<NotesLibrary />} />
       </Routes>
     </BrowserRouter>
   );

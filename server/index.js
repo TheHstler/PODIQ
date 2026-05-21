@@ -158,8 +158,8 @@ app.get("/api/feed", async (req, res) => {
         title: stripHtml(getText(item, "title")) || "Untitled Episode",
         description: stripHtml(
           getText(item, "description") ||
-          (getItunesField(item, "summary") || {}).textContent ||
-          "",
+            (getItunesField(item, "summary") || {}).textContent ||
+            "",
         ),
         audioSrc,
         pubDate: formatDate(getText(item, "pubDate")),
@@ -380,12 +380,16 @@ app.post("/api/insights", async (req, res) => {
   const { transcript, lines } = req.body;
 
   if (!transcript) {
-    return res.status(400).json({ error: "Missing transcript in request body." });
+    return res
+      .status(400)
+      .json({ error: "Missing transcript in request body." });
   }
 
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) {
-    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set in .env file." });
+    return res
+      .status(500)
+      .json({ error: "ANTHROPIC_API_KEY not set in .env file." });
   }
 
   console.log("[server] Generating insights with Claude...");
@@ -399,7 +403,7 @@ app.post("/api/insights", async (req, res) => {
        We send the transcript lines with their timestamps so Claude can
        accurately pinpoint where each entity is mentioned.               */
     const transcriptWithTimestamps = (lines || [])
-      .map(line => `[${line.time}s] ${line.text}`)
+      .map((line) => `[${line.time}s] ${line.text}`)
       .join("\n");
 
     /* ── STEP 3: Build the prompt ──────────────────────────────────────────
@@ -451,7 +455,7 @@ Return the top 8 most interesting entities maximum.`;
 
     /* ── STEP 6: Add full URLs to each insight ─────────────────────────────
        Convert the search terms into actual clickable links.            */
-    insights = insights.map(insight => ({
+    insights = insights.map((insight) => ({
       ...insight,
       links: {
         wikipedia: insight.wikipedia
@@ -459,15 +463,16 @@ Return the top 8 most interesting entities maximum.`;
           : `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(insight.name)}`,
         amazon: `https://www.amazon.co.uk/s?k=${encodeURIComponent(insight.amazon || insight.name)}`,
         imdb: `https://www.imdb.com/find?q=${encodeURIComponent(insight.imdb || insight.name)}`,
-      }
+      },
     }));
 
     console.log(`[server] Claude returned ${insights.length} insights`);
     res.json({ insights });
-
   } catch (err) {
     console.error("[server] Claude API error:", err.message);
-    res.status(502).json({ error: "Insights generation failed: " + err.message });
+    res
+      .status(502)
+      .json({ error: "Insights generation failed: " + err.message });
   }
 });
 
@@ -547,6 +552,39 @@ app.get("/api/search", async (req, res) => {
    Health check — visit http://localhost:3001/api/health to confirm running */
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "PodPlayer backend is running!" });
+});
+
+app.post("/api/bookmark-note", async (req, res) => {
+  const { text, time, type, episodeTitle } = req.body;
+  const Anthropic = require("@anthropic-ai/sdk");
+  const client = new Anthropic.Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  });
+  const msg = await client.messages.create({
+    model: "claude-haiku-4-5",
+    max_tokens: 150,
+    messages: [
+      {
+        role: "user",
+        content: `A podcast listener marked this moment as "${type}" at ${Math.floor(time / 60)}:${String(time % 60).padStart(2, "0")} in "${episodeTitle}": "${text}". Write ONE short sentence (max 20 words) explaining why this moment might be ${type}. No preamble.`,
+      },
+    ],
+  });
+  res.json({ note: msg.content[0]?.text || "" });
+});
+app.post("/api/summary", async (req, res) => {
+  const { transcript, markedMoments, episodeTitle } = req.body;
+  const Anthropic = require("@anthropic-ai/sdk");
+  const client = new Anthropic.Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  });
+  const prompt = `Summarise this podcast episode "${episodeTitle}" in 3-4 clear paragraphs. Focus especially on the moments the listener marked as important or confusing (listed below). Write for the listener personally.\n\nMarked moments:\n${markedMoments || "None marked"}\n\nTranscript:\n${transcript?.slice(0, 4000)}`;
+  const msg = await client.messages.create({
+    model: "claude-haiku-4-5",
+    max_tokens: 600,
+    messages: [{ role: "user", content: prompt }],
+  });
+  res.json({ summary: msg.content[0]?.text || "" });
 });
 
 /* ── START SERVER ──────────────────────────────────────────────────────────*/

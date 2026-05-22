@@ -1,13 +1,8 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    server/index.js
    Express backend for PodPlayer.
-   Handles:
-   1. RSS feed fetching (server-side, no CORS issues)
-   2. AI transcription via Hugging Face Whisper API
-   3. AI key insights via Hugging Face Flan-T5 API
 ───────────────────────────────────────────────────────────────────────────── */
 
-/* dotenv loads our secret keys from the .env file into process.env */
 require("dotenv").config();
 
 const express = require("express");
@@ -17,177 +12,102 @@ const fetch = require("node-fetch");
 const app = express();
 const PORT = 3001;
 
-/* ── MIDDLEWARE ────────────────────────────────────────────────────────────*/
 app.use(cors());
 app.use(express.json());
 
-/* ── HELPER: getText ───────────────────────────────────────────────────────
-   Safely reads text content of an XML element. Returns "" if not found.  */
+/* ── HELPERS ── */
 function getText(parent, tagName) {
   const el = parent.getElementsByTagName(tagName)[0];
   return el ? (el.textContent || "").trim() : "";
 }
 
-/* ── HELPER: getItunesField ────────────────────────────────────────────────
-   Reads iTunes namespace tags like itunes:duration and itunes:image.     */
 function getItunesField(parent, fieldName) {
   const byTag = parent.getElementsByTagName("itunes:" + fieldName)[0];
   if (byTag) return byTag;
-  const byNS = parent.getElementsByTagNameNS(
-    "http://www.itunes.com/dtds/podcast-1.0.dtd",
-    fieldName,
-  )[0];
+  const byNS = parent.getElementsByTagNameNS("http://www.itunes.com/dtds/podcast-1.0.dtd", fieldName)[0];
   return byNS || null;
 }
 
-/* ── HELPER: stripHtml ─────────────────────────────────────────────────────
-   Removes HTML tags from a string using regex.                           */
 function stripHtml(str) {
   if (!str) return "";
-  return str
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return str.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-/* ── HELPER: extractChannelImage ───────────────────────────────────────────
-   Gets podcast artwork from itunes:image or fallback image tag.         */
 function extractChannelImage(channel) {
   const itunesImg = getItunesField(channel, "image");
-  if (itunesImg && itunesImg.getAttribute("href")) {
-    return itunesImg.getAttribute("href");
-  }
+  if (itunesImg && itunesImg.getAttribute("href")) return itunesImg.getAttribute("href");
   const rssImg = channel.getElementsByTagName("image")[0];
   if (rssImg) return getText(rssImg, "url");
   return "";
 }
 
-/* ── HELPER: extractItemImage ──────────────────────────────────────────────
-   Gets episode artwork, falls back to channel artwork.                  */
 function extractItemImage(item, channelImage) {
   const itunesImg = getItunesField(item, "image");
-  if (itunesImg && itunesImg.getAttribute("href")) {
-    return itunesImg.getAttribute("href");
-  }
+  if (itunesImg && itunesImg.getAttribute("href")) return itunesImg.getAttribute("href");
   return channelImage || "";
 }
 
-/* ── HELPER: formatDate ────────────────────────────────────────────────────
-   Converts RFC 2822 date to readable format e.g. "12 May 2025".        */
 function formatDate(dateStr) {
   if (!dateStr) return "";
   try {
-    return new Date(dateStr).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
+    return new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  } catch { return dateStr; }
 }
 
-/* ── ROUTE: GET /api/feed ──────────────────────────────────────────────────
-   Fetches and parses any podcast RSS feed URL server-side.
-   Usage: GET /api/feed?url=https://feeds.megaphone.fm/darknetdiaries    */
+/* ── ROUTE: GET /api/feed ── */
 app.get("/api/feed", async (req, res) => {
   const { url } = req.query;
-
-  if (!url) {
-    return res.status(400).json({ error: "Missing url parameter." });
-  }
-
+  if (!url) return res.status(400).json({ error: "Missing url parameter." });
   console.log(`[server] Fetching RSS feed: ${url}`);
-
-  /* Fetch the RSS XML server-to-server — no CORS restrictions here */
   let rawXml;
   try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "PodPlayer/1.0 (Podcast RSS Reader)",
-        Accept: "application/rss+xml, application/xml, text/xml, */*",
-      },
-    });
+    const response = await fetch(url, { headers: { "User-Agent": "PodPlayer/1.0", Accept: "application/rss+xml, application/xml, text/xml, */*" } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     rawXml = await response.text();
   } catch (err) {
-    console.error("[server] Fetch error:", err.message);
-    return res
-      .status(502)
-      .json({ error: "Could not fetch feed: " + err.message });
+    return res.status(502).json({ error: "Could not fetch feed: " + err.message });
   }
-
-  /* Parse the XML using xmldom */
   try {
     const { DOMParser } = require("@xmldom/xmldom");
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(rawXml, "application/xml");
     const channel = xmlDoc.getElementsByTagName("channel")[0];
     if (!channel) throw new Error("No <channel> found");
-
     const channelImage = extractChannelImage(channel);
-    const channelInfo = {
-      title: getText(channel, "title") || "Untitled Podcast",
-      description: stripHtml(getText(channel, "description")),
-      image: channelImage,
-    };
-
+    const channelInfo = { title: getText(channel, "title") || "Untitled Podcast", description: stripHtml(getText(channel, "description")), image: channelImage };
     const items = Array.from(xmlDoc.getElementsByTagName("item"));
     const episodes = items.map((item, index) => {
-      /* Try multiple ways to find the audio URL —
-   some feeds use enclosure, others use media:content or link */
       const enclosure = item.getElementsByTagName("enclosure")[0];
       const mediaContent = item.getElementsByTagName("media:content")[0];
       const mediaGroup = item.getElementsByTagName("media:group")[0];
-
       let audioSrc = "";
-      if (enclosure && enclosure.getAttribute("url")) {
-        /* Standard RSS — most podcast feeds use this */
-        audioSrc = enclosure.getAttribute("url");
-      } else if (mediaContent && mediaContent.getAttribute("url")) {
-        /* Some feeds use media:content instead */
-        audioSrc = mediaContent.getAttribute("url");
-      } else if (mediaGroup) {
-        /* Some feeds wrap media in a group element */
-        const groupMedia = mediaGroup.getElementsByTagName("media:content")[0];
-        audioSrc = groupMedia ? groupMedia.getAttribute("url") || "" : "";
-      }
+      if (enclosure && enclosure.getAttribute("url")) audioSrc = enclosure.getAttribute("url");
+      else if (mediaContent && mediaContent.getAttribute("url")) audioSrc = mediaContent.getAttribute("url");
+      else if (mediaGroup) { const gm = mediaGroup.getElementsByTagName("media:content")[0]; audioSrc = gm ? gm.getAttribute("url") || "" : ""; }
       const durationEl = getItunesField(item, "duration");
       return {
         guid: getText(item, "guid") || String(index),
         title: stripHtml(getText(item, "title")) || "Untitled Episode",
-        description: stripHtml(
-          getText(item, "description") ||
-            (getItunesField(item, "summary") || {}).textContent ||
-            "",
-        ),
-        audioSrc,
-        pubDate: formatDate(getText(item, "pubDate")),
+        description: stripHtml(getText(item, "description") || (getItunesField(item, "summary") || {}).textContent || ""),
+        audioSrc, pubDate: formatDate(getText(item, "pubDate")),
         duration: durationEl ? durationEl.textContent.trim() : "",
         image: extractItemImage(item, channelImage),
       };
     });
-
     console.log(`[server] Parsed ${episodes.length} episodes`);
     res.json({ channel: channelInfo, episodes });
   } catch (err) {
-    console.error("[server] Parse error:", err.message);
     res.status(500).json({ error: "Failed to parse RSS XML: " + err.message });
   }
 });
 
-/* ── ROUTE: POST /api/transcribe ───────────────────────────────────────────
-   Fetches a real transcript from Taddy's podcast API using the episode
-   audio URL to find the matching episode in their database.
-   Falls back to AssemblyAI if Taddy doesn't have a transcript.
-
-   Usage: POST /api/transcribe with body { audioUrl, title }             */
+/* ── ROUTE: POST /api/transcribe ─────────────────────────────────────────────
+   Now includes speaker_labels: true for AssemblyAI so each sentence
+   gets a speaker ID (A, B, C...). After transcription, Claude is used
+   to identify the real names of each speaker from context.              */
 app.post("/api/transcribe", async (req, res) => {
   const { audioUrl, title } = req.body;
-
-  if (!audioUrl) {
-    return res.status(400).json({ error: "Missing audioUrl in request body." });
-  }
+  if (!audioUrl) return res.status(400).json({ error: "Missing audioUrl." });
 
   const TADDY_USER_ID = process.env.TADDY_USER_ID;
   const TADDY_API_KEY = process.env.TADDY_API_KEY;
@@ -195,120 +115,64 @@ app.post("/api/transcribe", async (req, res) => {
 
   console.log(`[server] Looking up transcript for: ${title}`);
 
-  /* ── STEP 1: Try Taddy first — they may already have the transcript ────
-     We search for the episode by name to get its Taddy UUID, then fetch
-     the transcript. This uses 1 request from our 500 monthly limit.     */
+  /* ── STEP 1: Try Taddy first ── */
   if (TADDY_USER_ID && TADDY_API_KEY) {
     try {
-      /* Search Taddy for the episode by title */
       const searchQuery = `
         query {
-          searchForTerm(
-            term: ${JSON.stringify(title || "")}
-            filterForTypes: PODCASTEPISODE
-          ) {
+          searchForTerm(term: ${JSON.stringify(title || "")} filterForTypes: PODCASTEPISODE) {
             podcastEpisodes {
-              uuid
-              name
-              audioUrl
-              transcript {
-                sentences {
-                  startTime
-                  endTime
-                  text
-                }
-              }
+              uuid name audioUrl
+              transcript { sentences { startTime endTime text } }
             }
           }
         }
       `;
-
       const taddyResponse = await fetch("https://api.taddy.org", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-USER-ID": TADDY_USER_ID,
-          "X-API-KEY": TADDY_API_KEY,
-        },
+        headers: { "Content-Type": "application/json", "X-USER-ID": TADDY_USER_ID, "X-API-KEY": TADDY_API_KEY },
         body: JSON.stringify({ query: searchQuery }),
       });
-
       const taddyData = await taddyResponse.json();
       const episodes = taddyData?.data?.searchForTerm?.podcastEpisodes || [];
-
-      /* Find the episode that matches our audio URL or title */
-      const matchedEpisode =
-        episodes.find(
-          (ep) =>
-            ep.audioUrl === audioUrl ||
-            ep.name?.toLowerCase() === (title || "").toLowerCase(),
-        ) || episodes[0]; /* fall back to first result if no exact match */
-
-      /* Check if Taddy has a transcript for this episode */
+      const matchedEpisode = episodes.find((ep) => ep.audioUrl === audioUrl || ep.name?.toLowerCase() === (title || "").toLowerCase()) || episodes[0];
       const sentences = matchedEpisode?.transcript?.sentences || [];
 
       if (sentences.length > 0) {
-        console.log(
-          `[server] Taddy transcript found — ${sentences.length} sentences`,
-        );
-
-        /* Convert Taddy sentences to our transcript line format */
+        console.log(`[server] Taddy transcript found — ${sentences.length} sentences`);
+        /* Taddy doesn't give speaker labels so we just return without speakers */
         const transcriptLines = sentences.map((sentence) => ({
-          /* Taddy gives startTime in milliseconds — convert to seconds */
           time: Math.floor((sentence.startTime || 0) / 1000),
           text: sentence.text,
+          speaker: null,
+          speakerLabel: null,
         }));
-
         const fullText = sentences.map((s) => s.text).join(" ");
-
-        return res.json({
-          transcript: transcriptLines,
-          fullText,
-          source: "taddy" /* tell frontend where transcript came from */,
-          isPreview: false,
-        });
+        return res.json({ transcript: transcriptLines, fullText, source: "taddy", isPreview: false });
       }
-
-      console.log(
-        "[server] Taddy has no transcript for this episode — falling back to AssemblyAI",
-      );
+      console.log("[server] Taddy has no transcript — falling back to AssemblyAI");
     } catch (err) {
-      console.warn(
-        "[server] Taddy lookup failed:",
-        err.message,
-        "— falling back to AssemblyAI",
-      );
+      console.warn("[server] Taddy failed:", err.message);
     }
   }
 
-  /* ── STEP 2: Fall back to AssemblyAI if Taddy has no transcript ────────
-     AssemblyAI transcribes from the raw audio — slower but works on
-     any episode regardless of whether Taddy knows about it.             */
-  if (!ASSEMBLYAI_KEY) {
-    return res
-      .status(500)
-      .json({ error: "No transcription service available." });
-  }
+  /* ── STEP 2: AssemblyAI with speaker diarization ── */
+  if (!ASSEMBLYAI_KEY) return res.status(500).json({ error: "No transcription service available." });
 
-  console.log(`[server] Transcribing with AssemblyAI: ${audioUrl}`);
+  console.log(`[server] Transcribing with AssemblyAI (speaker diarization on): ${audioUrl}`);
 
   try {
-    /* Submit audio to AssemblyAI */
-    const submitResponse = await fetch(
-      "https://api.assemblyai.com/v2/transcript",
-      {
-        method: "POST",
-        headers: {
-          Authorization: ASSEMBLYAI_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          audio_url: audioUrl,
-          speech_models: ["universal-2"],
-          audio_end_at: 180000 /* first 3 minutes only */,
-        }),
-      },
-    );
+    /* Submit with speaker_labels: true — this tells AssemblyAI to detect
+       who is speaking and label each sentence with speaker_a, speaker_b etc */
+    const submitResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
+      method: "POST",
+      headers: { Authorization: ASSEMBLYAI_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_url: audioUrl,
+        speaker_labels: true,        /* ← enables speaker diarization */
+        audio_end_at: 180000,        /* first 3 minutes only */
+      }),
+    });
 
     if (!submitResponse.ok) {
       const err = await submitResponse.text();
@@ -324,223 +188,265 @@ app.post("/api/transcribe", async (req, res) => {
     let attempts = 0;
     while (attempts < 40) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
-      const pollResponse = await fetch(
-        `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
-        { headers: { Authorization: ASSEMBLYAI_KEY } },
-      );
+      const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, { headers: { Authorization: ASSEMBLYAI_KEY } });
       transcriptData = await pollResponse.json();
       console.log(`[server] AssemblyAI status: ${transcriptData.status}`);
       if (transcriptData.status === "completed") break;
-      if (transcriptData.status === "error")
-        throw new Error(transcriptData.error);
+      if (transcriptData.status === "error") throw new Error(transcriptData.error);
       attempts++;
     }
 
-    if (!transcriptData || transcriptData.status !== "completed") {
-      throw new Error("Transcription timed out.");
-    }
+    if (!transcriptData || transcriptData.status !== "completed") throw new Error("Transcription timed out.");
 
-    /* Get sentences with timestamps */
-    const sentencesResponse = await fetch(
-      `https://api.assemblyai.com/v2/transcript/${transcriptId}/sentences`,
-      { headers: { Authorization: ASSEMBLYAI_KEY } },
-    );
+    /* Get sentences — these now include speaker field */
+    const sentencesResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}/sentences`, { headers: { Authorization: ASSEMBLYAI_KEY } });
     const sentencesData = await sentencesResponse.json();
+    const sentences = sentencesData.sentences || [];
 
-    const transcriptLines = (sentencesData.sentences || []).map((sentence) => ({
+    console.log(`[server] AssemblyAI complete — ${sentences.length} lines`);
+
+    /* Build initial transcript lines with raw speaker IDs (A, B, C...) */
+    const transcriptLines = sentences.map((sentence) => ({
       time: Math.floor(sentence.start / 1000),
       text: sentence.text,
+      /* AssemblyAI returns speaker as "A", "B" etc */
+      speaker: sentence.speaker || null,
+      speakerLabel: sentence.speaker ? `Speaker ${sentence.speaker}` : null,
     }));
 
-    console.log(
-      `[server] AssemblyAI complete — ${transcriptLines.length} lines`,
-    );
+    const fullText = transcriptData.text || "";
 
-    res.json({
-      transcript: transcriptLines,
-      fullText: transcriptData.text || "",
-      source: "assemblyai",
-      isPreview: true,
-    });
+    /* ── STEP 3: Use Claude to identify real speaker names ──────────────────
+       We send the first 30 lines of transcript to Claude and ask it to
+       figure out who is speaking based on context clues like introductions,
+       names being said, or host/guest patterns.                          */
+    const speakerMap = await identifySpeakers(transcriptLines, title);
+
+    /* Apply the real names from Claude to each line */
+    const labelledLines = transcriptLines.map((line) => ({
+      ...line,
+      speakerLabel: line.speaker && speakerMap[line.speaker]
+        ? speakerMap[line.speaker]
+        : line.speakerLabel,
+    }));
+
+    console.log(`[server] Speaker map:`, speakerMap);
+
+    res.json({ transcript: labelledLines, fullText, source: "assemblyai", isPreview: true, speakerMap });
+
   } catch (err) {
     console.error("[server] Transcription error:", err.message);
     res.status(502).json({ error: "Transcription failed: " + err.message });
   }
 });
 
-/* ── ROUTE: POST /api/insights ─────────────────────────────────────────────
-   Sends the full transcript to Claude API which returns structured JSON
-   insights with timestamps. Each insight includes the entity name, type,
-   description, timestamp where it's mentioned, and links for Wikipedia,
-   Amazon and IMDb.
-
-   Usage: POST /api/insights with body { transcript: "full text", 
-                                         lines: [{ time, text }] }       */
-app.post("/api/insights", async (req, res) => {
-  const { transcript, lines } = req.body;
-
-  if (!transcript) {
-    return res
-      .status(400)
-      .json({ error: "Missing transcript in request body." });
-  }
-
+/* ── HELPER: identifySpeakers ───────────────────────────────────────────────
+   Sends the first chunk of transcript to Claude and asks it to identify
+   who each speaker (A, B, C...) actually is based on context.
+   Returns a map like { "A": "Jack Rhysider", "B": "Guest Name" }        */
+async function identifySpeakers(transcriptLines, episodeTitle) {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_KEY) {
-    return res
-      .status(500)
-      .json({ error: "ANTHROPIC_API_KEY not set in .env file." });
-  }
+  if (!ANTHROPIC_KEY) return {};
 
-  console.log("[server] Generating insights with Claude...");
+  /* Only send first 30 lines — enough for Claude to figure out names */
+  const sample = transcriptLines
+    .slice(0, 30)
+    .filter((l) => l.speaker)
+    .map((l) => `[Speaker ${l.speaker}] ${l.text}`)
+    .join("\n");
+
+  if (!sample) return {};
+
+  /* Find unique speaker IDs */
+  const uniqueSpeakers = [...new Set(transcriptLines.filter((l) => l.speaker).map((l) => l.speaker))];
+  if (!uniqueSpeakers.length) return {};
 
   try {
-    /* ── STEP 1: Initialise the Anthropic SDK ──────────────────────────── */
     const Anthropic = require("@anthropic-ai/sdk");
     const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
 
-    /* ── STEP 2: Build the transcript with timestamps ──────────────────────
-       We send the transcript lines with their timestamps so Claude can
-       accurately pinpoint where each entity is mentioned.               */
-    const transcriptWithTimestamps = (lines || [])
-      .map((line) => `[${line.time}s] ${line.text}`)
-      .join("\n");
+    const prompt = `This is the beginning of a podcast episode called "${episodeTitle}".
 
-    /* ── STEP 3: Build the prompt ──────────────────────────────────────────
-       We tell Claude exactly what JSON structure to return so we can
-       parse it reliably. We ask for timestamps so we can place dots
-       on the audio timeline at exactly the right position.              */
-    const prompt = `You are analyzing a podcast transcript. Extract the most interesting and important entities mentioned — people, books, films, TV shows, places, companies, or concepts.
+The transcript has been automatically labelled with speaker IDs (A, B, C...).
 
-For each entity return a JSON array. Each item must have:
-- "timestamp": the number of seconds (from the [Xs] markers) where this entity is first mentioned
-- "type": one of "person", "book", "film", "show", "place", "company", "concept"  
-- "name": the entity name as mentioned
-- "description": 1-2 sentences explaining who/what this is and why it's relevant to the podcast
-- "wikipedia": the Wikipedia page title for this entity (just the title, no URL)
-- "amazon": a good search query to find this on Amazon (for books especially)
-- "imdb": a good search query to find this on IMDb (for films and shows)
-- "relevance": one sentence on why this was mentioned in the podcast
+Your job is to identify the real name of each speaker based on context clues — introductions, names being mentioned, host/guest patterns, or anything else in the text.
 
-Return ONLY a valid JSON array. No markdown, no explanation, no backticks. Just the raw JSON array starting with [ and ending with ].
+Transcript sample:
+${sample}
 
-Transcript:
-${transcriptWithTimestamps}
+Speakers found: ${uniqueSpeakers.map((s) => `Speaker ${s}`).join(", ")}
 
-Return the top 8 most interesting entities maximum.`;
+Return ONLY a valid JSON object mapping speaker ID to their real name. If you cannot determine a name, use "Host" for the first speaker and "Guest" for others.
 
-    /* ── STEP 4: Call Claude API ───────────────────────────────────────────
-       We use claude-3-haiku which is the fastest and cheapest model —
-       perfect for structured data extraction like this.                 */
+Example: {"A": "Jack Rhysider", "B": "Kevin Mitnick"}
+
+Return ONLY the JSON object, no explanation, no markdown.`;
+
     const message = await client.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 2000,
+      max_tokens: 200,
       messages: [{ role: "user", content: prompt }],
     });
 
-    /* ── STEP 5: Parse the JSON response ───────────────────────────────────
-       Claude returns a text block — we parse it as JSON.               */
-    const rawText = message.content[0]?.text || "[]";
-    console.log("[server] Claude raw response:", rawText.slice(0, 200));
+    const rawText = message.content[0]?.text || "{}";
+    console.log("[server] Speaker identification response:", rawText);
 
+    const cleaned = rawText.replace(/```json|```/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch (err) {
+    console.warn("[server] Speaker identification failed:", err.message);
+    /* Fall back to generic labels */
+    const fallback = {};
+    uniqueSpeakers.forEach((s, i) => { fallback[s] = i === 0 ? "Host" : `Guest ${i}`; });
+    return fallback;
+  }
+}
+
+/* ── ROUTE: POST /api/insights ── */
+app.post("/api/insights", async (req, res) => {
+  const { transcript, lines } = req.body;
+  if (!transcript) return res.status(400).json({ error: "Missing transcript." });
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set." });
+  console.log("[server] Generating insights with Claude...");
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
+    const transcriptWithTimestamps = (lines || []).map((line) => `[${line.time}s] ${line.text}`).join("\n");
+    const prompt = `You are analyzing a podcast transcript. Extract the most interesting and important entities mentioned — people, books, films, TV shows, places, companies, or concepts.
+
+For each entity return a JSON array. Each item must have:
+- "timestamp": seconds from the [Xs] markers where first mentioned
+- "type": one of "person", "book", "film", "show", "place", "company", "concept"
+- "name": entity name as mentioned
+- "description": 1-2 sentences explaining what/who this is
+- "wikipedia": Wikipedia page title (just the title, no URL)
+- "amazon": search query for Amazon
+- "imdb": search query for IMDb
+- "relevance": one sentence on why it was mentioned
+
+Return ONLY a valid JSON array. No markdown, no explanation. Maximum 8 entities.
+
+Transcript:
+${transcriptWithTimestamps}`;
+
+    const message = await client.messages.create({ model: "claude-haiku-4-5", max_tokens: 2000, messages: [{ role: "user", content: prompt }] });
+    const rawText = message.content[0]?.text || "[]";
+    console.log("[server] Claude insights response:", rawText.slice(0, 200));
     let insights = [];
     try {
-      /* Strip any accidental markdown backticks just in case */
-      const cleaned = rawText.replace(/```json|```/g, "").trim();
-      insights = JSON.parse(cleaned);
-    } catch (parseErr) {
-      console.error("[server] Failed to parse Claude JSON:", parseErr.message);
-      insights = [];
-    }
-
-    /* ── STEP 6: Add full URLs to each insight ─────────────────────────────
-       Convert the search terms into actual clickable links.            */
+      insights = JSON.parse(rawText.replace(/```json|```/g, "").trim());
+    } catch (e) { insights = []; }
     insights = insights.map((insight) => ({
       ...insight,
       links: {
-        wikipedia: insight.wikipedia
-          ? `https://en.wikipedia.org/wiki/${encodeURIComponent(insight.wikipedia.replace(/ /g, "_"))}`
-          : `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(insight.name)}`,
+        wikipedia: insight.wikipedia ? `https://en.wikipedia.org/wiki/${encodeURIComponent(insight.wikipedia.replace(/ /g, "_"))}` : `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(insight.name)}`,
         amazon: `https://www.amazon.co.uk/s?k=${encodeURIComponent(insight.amazon || insight.name)}`,
         imdb: `https://www.imdb.com/find?q=${encodeURIComponent(insight.imdb || insight.name)}`,
       },
     }));
-
-    console.log(`[server] Claude returned ${insights.length} insights`);
+    console.log(`[server] Returned ${insights.length} insights`);
     res.json({ insights });
   } catch (err) {
-    console.error("[server] Claude API error:", err.message);
-    res
-      .status(502)
-      .json({ error: "Insights generation failed: " + err.message });
+    console.error("[server] Insights error:", err.message);
+    res.status(502).json({ error: "Insights generation failed: " + err.message });
   }
 });
 
-/* ── ROUTE: GET /api/search ────────────────────────────────────────────────
-   Searches for podcasts by name using Taddy's GraphQL API.
-   Returns a list of matching podcasts with title, image and RSS URL.
+/* ── ROUTE: POST /api/summary ── */
+app.post("/api/summary", async (req, res) => {
+  const { transcript, markedMoments, episodeTitle } = req.body;
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const prompt = `Summarise this podcast episode "${episodeTitle}" in 3-4 clear paragraphs. Focus especially on the moments the listener marked as important or confusing. Write directly to the listener in second person.\n\nMarked moments:\n${markedMoments || "None marked yet"}\n\nTranscript:\n${(transcript || "").slice(0, 4000)}`;
+    const message = await client.messages.create({ model: "claude-haiku-4-5", max_tokens: 600, messages: [{ role: "user", content: prompt }] });
+    res.json({ summary: message.content[0]?.text || "" });
+  } catch (err) {
+    console.error("[server] Summary error:", err.message);
+    res.status(502).json({ error: "Summary failed: " + err.message });
+  }
+});
 
-   Usage: GET /api/search?q=freakonomics                                 */
+/* ── ROUTE: POST /api/bookmark-note ── */
+app.post("/api/bookmark-note", async (req, res) => {
+  const { text, time, type, episodeTitle } = req.body;
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const mins = Math.floor(time / 60);
+    const secs = String(time % 60).padStart(2, "0");
+    const message = await client.messages.create({
+      model: "claude-haiku-4-5", max_tokens: 150,
+      messages: [{ role: "user", content: `A podcast listener marked this moment as "${type}" at ${mins}:${secs} in "${episodeTitle}": "${text}". Write ONE short sentence (max 20 words) explaining why this moment might be ${type}. No preamble.` }],
+    });
+    res.json({ note: message.content[0]?.text || "" });
+  } catch (err) {
+    console.error("[server] Bookmark note error:", err.message);
+    res.status(502).json({ note: "" });
+  }
+});
+
+/* ── ROUTE: POST /api/chapters ── */
+app.post("/api/chapters", async (req, res) => {
+  const { transcript, lines } = req.body;
+  if (!transcript) return res.status(400).json({ error: "Missing transcript." });
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set." });
+  console.log("[server] Generating chapters with Claude...");
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
+    const transcriptWithTimestamps = (lines || []).map((line) => `[${line.time}s] ${line.text}`).join("\n");
+    const prompt = `You are analysing a podcast transcript. Identify the main topic/chapter transitions and generate chapter markers.
+
+Return a JSON array where each item has:
+- "timestamp": number of seconds where this chapter starts
+- "title": short chapter title (3-6 words max)
+- "summary": one sentence describing what this section covers
+
+Return ONLY a valid JSON array. No markdown. Maximum 8 chapters.
+
+Transcript:
+${transcriptWithTimestamps}`;
+    const message = await client.messages.create({ model: "claude-haiku-4-5", max_tokens: 800, messages: [{ role: "user", content: prompt }] });
+    const rawText = message.content[0]?.text || "[]";
+    let chapters = [];
+    try { chapters = JSON.parse(rawText.replace(/```json|```/g, "").trim()); } catch (e) { chapters = []; }
+    console.log(`[server] Generated ${chapters.length} chapters`);
+    res.json({ chapters });
+  } catch (err) {
+    console.error("[server] Chapters error:", err.message);
+    res.status(502).json({ error: "Chapter generation failed: " + err.message });
+  }
+});
+
+/* ── ROUTE: GET /api/search ── */
 app.get("/api/search", async (req, res) => {
   const { q } = req.query;
-
-  if (!q) {
-    return res.status(400).json({ error: "Missing search query parameter q." });
-  }
-
+  if (!q) return res.status(400).json({ error: "Missing search query." });
   const TADDY_USER_ID = process.env.TADDY_USER_ID;
   const TADDY_API_KEY = process.env.TADDY_API_KEY;
-
-  if (!TADDY_USER_ID || !TADDY_API_KEY) {
-    return res
-      .status(500)
-      .json({ error: "Taddy API credentials not set in .env file." });
-  }
-
+  if (!TADDY_USER_ID || !TADDY_API_KEY) return res.status(500).json({ error: "Taddy API credentials not set." });
   console.log(`[server] Searching Taddy for: ${q}`);
-
   try {
-    /* ── GraphQL query to search Taddy for podcasts by name ───────────────
-       We ask for uuid, name, description, imageUrl and rssUrl so we have
-       everything needed to display results and load the feed.            */
     const searchQuery = `
       query {
-        searchForTerm(
-          term: ${JSON.stringify(q)}
-          filterForTypes: [PODCASTSERIES]
-        ) {
+        searchForTerm(term: ${JSON.stringify(q)} filterForTypes: [PODCASTSERIES]) {
           searchId
-          podcastSeries {
-            uuid
-            name
-            description(shouldStripHtmlTags: true)
-            imageUrl
-            rssUrl
-          }
+          podcastSeries { uuid name description(shouldStripHtmlTags: true) imageUrl rssUrl }
         }
       }
     `;
-
     const taddyResponse = await fetch("https://api.taddy.org", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-USER-ID": TADDY_USER_ID,
-        "X-API-KEY": TADDY_API_KEY,
-      },
+      headers: { "Content-Type": "application/json", "X-USER-ID": TADDY_USER_ID, "X-API-KEY": TADDY_API_KEY },
       body: JSON.stringify({ query: searchQuery }),
     });
-
-    if (!taddyResponse.ok) {
-      throw new Error(`Taddy returned HTTP ${taddyResponse.status}`);
-    }
-
+    if (!taddyResponse.ok) throw new Error(`Taddy returned HTTP ${taddyResponse.status}`);
     const taddyData = await taddyResponse.json();
     const podcasts = taddyData?.data?.searchForTerm?.podcastSeries || [];
-
     console.log(`[server] Taddy found ${podcasts.length} podcasts for "${q}"`);
-
-    /* Return the podcast list to the frontend */
     res.json({ podcasts });
   } catch (err) {
     console.error("[server] Search error:", err.message);
@@ -548,123 +454,15 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-/* ── ROUTE: GET /api/health ────────────────────────────────────────────────
-   Health check — visit http://localhost:3001/api/health to confirm running */
+/* ── ROUTE: GET /api/health ── */
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "PodPlayer backend is running!" });
 });
 
-app.post("/api/bookmark-note", async (req, res) => {
-  const { text, time, type, episodeTitle } = req.body;
-  const Anthropic = require("@anthropic-ai/sdk");
-  const client = new Anthropic.Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
-  const msg = await client.messages.create({
-    model: "claude-haiku-4-5",
-    max_tokens: 150,
-    messages: [
-      {
-        role: "user",
-        content: `A podcast listener marked this moment as "${type}" at ${Math.floor(time / 60)}:${String(time % 60).padStart(2, "0")} in "${episodeTitle}": "${text}". Write ONE short sentence (max 20 words) explaining why this moment might be ${type}. No preamble.`,
-      },
-    ],
-  });
-  res.json({ note: msg.content[0]?.text || "" });
-});
-app.post("/api/summary", async (req, res) => {
-  const { transcript, markedMoments, episodeTitle } = req.body;
-  const Anthropic = require("@anthropic-ai/sdk");
-  const client = new Anthropic.Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
-  const prompt = `Summarise this podcast episode "${episodeTitle}" in 3-4 clear paragraphs. Focus especially on the moments the listener marked as important or confusing (listed below). Write for the listener personally.\n\nMarked moments:\n${markedMoments || "None marked"}\n\nTranscript:\n${transcript?.slice(0, 4000)}`;
-  const msg = await client.messages.create({
-    model: "claude-haiku-4-5",
-    max_tokens: 600,
-    messages: [{ role: "user", content: prompt }],
-  });
-  res.json({ summary: msg.content[0]?.text || "" });
-});
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   ADD THIS ROUTE TO server/index.js
-   Paste it directly above the app.listen() line at the bottom.
-
-   POST /api/chapters
-   Sends the transcript to Claude and gets back AI-generated chapter markers
-   with timestamps and titles — shown inside the transcript panel.
-───────────────────────────────────────────────────────────────────────────── */
-app.post("/api/chapters", async (req, res) => {
-  const { transcript, lines } = req.body;
-
-  if (!transcript) {
-    return res.status(400).json({ error: "Missing transcript." });
-  }
-
-  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_KEY) {
-    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set." });
-  }
-
-  console.log("[server] Generating chapters with Claude...");
-
-  try {
-    const Anthropic = require("@anthropic-ai/sdk");
-    const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
-
-    /* Build timestamped transcript for Claude to analyse */
-    const transcriptWithTimestamps = (lines || [])
-      .map((line) => `[${line.time}s] ${line.text}`)
-      .join("\n");
-
-    const prompt = `You are analysing a podcast transcript. Identify the main topic/chapter transitions in this podcast and generate chapter markers.
-
-Return a JSON array where each item has:
-- "timestamp": number of seconds where this chapter starts (from the [Xs] markers)
-- "title": short chapter title (3-6 words max)
-- "summary": one sentence describing what this section covers
-
-Return ONLY a valid JSON array. No markdown, no explanation. Maximum 8 chapters.
-
-Transcript:
-${transcriptWithTimestamps}`;
-
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 800,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const rawText = message.content[0]?.text || "[]";
-    console.log("[server] Chapters raw response:", rawText.slice(0, 200));
-
-    let chapters = [];
-    try {
-      const cleaned = rawText.replace(/```json|```/g, "").trim();
-      chapters = JSON.parse(cleaned);
-    } catch (parseErr) {
-      console.error(
-        "[server] Failed to parse chapters JSON:",
-        parseErr.message,
-      );
-      chapters = [];
-    }
-
-    console.log(`[server] Generated ${chapters.length} chapters`);
-    res.json({ chapters });
-  } catch (err) {
-    console.error("[server] Chapters error:", err.message);
-    res
-      .status(502)
-      .json({ error: "Chapter generation failed: " + err.message });
-  }
-});
-
-/* ── START SERVER ──────────────────────────────────────────────────────────*/
+/* ── START SERVER ── */
 app.listen(PORT, () => {
   console.log(`✅ PodPlayer backend running at http://localhost:${PORT}`);
-  console.log(
-    `   Taddy API loaded: ${process.env.TADDY_API_KEY ? "YES ✅" : "NO ❌ — check .env file"}`,
-  );
+  console.log(`   Taddy API: ${process.env.TADDY_API_KEY ? "YES ✅" : "NO ❌"}`);
+  console.log(`   AssemblyAI: ${process.env.ASSEMBLYAI_API_KEY ? "YES ✅" : "NO ❌"}`);
+  console.log(`   Anthropic: ${process.env.ANTHROPIC_API_KEY ? "YES ✅" : "NO ❌"}`);
 });

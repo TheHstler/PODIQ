@@ -1,16 +1,23 @@
 /* ─────────────────────────────────────────────────────────────────────────────
    src/pages/PlayerPage.jsx
-   Key updates:
-   - Transcript auto-scrolls to keep current line in view as audio plays
-   - Active transcript line highlighted in real time
-   - Bookmark icons always visible (not hidden until hover)
-   - Player controls made larger and more prominent
-   - Speaker label detection from transcript text
+   Updated: speaker diarization display — each speaker gets their own
+   colour bubble, name label, and chat-style layout in the transcript.
 ───────────────────────────────────────────────────────────────────────────── */
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import episodes from "../data/episodes";
-import { colors, fonts, effects, card, btnPrimary, btnGhost, input, timeBadge, typeBadge } from "../styles/theme";
+import { colors, fonts, effects, btnPrimary, btnGhost } from "../styles/theme";
+
+/* ── SPEAKER COLOUR PALETTE ──
+   Each unique speaker gets one of these colours automatically.
+   Colour 0 = host (purple), 1 = first guest (blue), 2 = second guest (teal) etc */
+const SPEAKER_COLOURS = [
+  { bg: "rgba(139,92,246,0.12)", border: "rgba(139,92,246,0.3)", text: "#8B5CF6", dot: "#8B5CF6" },   /* purple — host */
+  { bg: "rgba(96,165,250,0.12)", border: "rgba(96,165,250,0.3)", text: "#60A5FA", dot: "#60A5FA" },    /* blue — guest 1 */
+  { bg: "rgba(110,231,183,0.12)", border: "rgba(110,231,183,0.3)", text: "#6EE7B7", dot: "#6EE7B7" },  /* teal — guest 2 */
+  { bg: "rgba(244,114,182,0.12)", border: "rgba(244,114,182,0.3)", text: "#F472B6", dot: "#F472B6" },  /* pink — guest 3 */
+  { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.3)", text: "#F59E0B", dot: "#F59E0B" },    /* amber — guest 4 */
+];
 
 function PlayerPage({
   audioRef: sharedAudioRef,
@@ -26,10 +33,7 @@ function PlayerPage({
 
   const localAudioRef = useRef(null);
   const audioRef = sharedAudioRef || localAudioRef;
-
-  /* Ref to the transcript scroll container — used for auto-scroll */
   const transcriptScrollRef = useRef(null);
-  /* Refs for each transcript line so we can scroll to the active one */
   const lineRefs = useRef({});
 
   const [localIsPlaying, setLocalIsPlaying] = useState(false);
@@ -48,6 +52,7 @@ function PlayerPage({
   const [activeTab, setActiveTab] = useState("transcript");
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const [transcript, setTranscript] = useState([]);
+  const [speakerMap, setSpeakerMap] = useState({}); /* { "A": "Jack Rhysider", "B": "Guest" } */
   const [chapters, setChapters] = useState([]);
   const [isGeneratingChapters, setIsGeneratingChapters] = useState(false);
   const [insights, setInsights] = useState([]);
@@ -70,7 +75,7 @@ function PlayerPage({
 
   const episode = location.state?.episode || episodes.find((ep) => ep.id === parseInt(id));
 
-  /* ── FIND ACTIVE TRANSCRIPT LINE based on currentTime ── */
+  /* ── FIND ACTIVE LINE ── */
   const activeLineIndex = (() => {
     if (!transcript.length) return -1;
     let active = 0;
@@ -81,45 +86,43 @@ function PlayerPage({
     return active;
   })();
 
-  /* ── AUTO-SCROLL TRANSCRIPT to keep active line visible ── */
+  /* ── AUTO-SCROLL TO ACTIVE LINE ── */
   useEffect(() => {
     if (!transcriptExpanded) return;
     if (activeLineIndex < 0) return;
     const lineEl = lineRefs.current[activeLineIndex];
-    if (lineEl && transcriptScrollRef.current) {
-      lineEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
+    if (lineEl) lineEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeLineIndex, transcriptExpanded]);
 
-  /* ── DETECT SPEAKER from transcript line ──
-     Lines that start with "NAME:" pattern are treated as speaker labels.
-     e.g. "Jack: Welcome to the show" → speaker = "Jack"            */
-  function parseSpeaker(text) {
-    const match = text.match(/^([A-Z][a-zA-Z\s]{1,20}):\s+(.+)/);
-    if (match) return { speaker: match[1].trim(), text: match[2].trim() };
-    return { speaker: null, text };
+  /* ── BUILD SPEAKER INDEX MAP ──
+     Maps speaker ID (A, B...) to a colour index so each speaker
+     consistently gets the same colour throughout the transcript.   */
+  const speakerColorIndex = (() => {
+    const map = {};
+    let idx = 0;
+    for (const line of transcript) {
+      if (line.speaker && !(line.speaker in map)) {
+        map[line.speaker] = idx++;
+      }
+    }
+    return map;
+  })();
+
+  function getSpeakerColour(speakerId) {
+    const idx = speakerColorIndex[speakerId] ?? 0;
+    return SPEAKER_COLOURS[idx % SPEAKER_COLOURS.length];
   }
 
-  /* Build a colour for each unique speaker name */
-  const speakerColors = {};
-  const speakerPalette = [colors.purple, colors.blue, colors.teal, "#F472B6", "#F59E0B"];
-  let speakerCount = 0;
-  transcript.forEach((line) => {
-    const { speaker } = parseSpeaker(line.text);
-    if (speaker && !speakerColors[speaker]) {
-      speakerColors[speaker] = speakerPalette[speakerCount % speakerPalette.length];
-      speakerCount++;
-    }
-  });
+  function getSpeakerName(speakerId) {
+    /* Use Claude-identified name if available, else fall back to label */
+    return speakerMap[speakerId] || `Speaker ${speakerId}`;
+  }
 
-  /* ── LOAD EPISODE INTO SHARED AUDIO ── */
+  /* ── EPISODE LOAD ── */
   useEffect(() => {
     if (!episode) return;
-    if (sharedAudioRef && loadEpisode && currentEpisode?.guid !== episode.guid) {
-      loadEpisode(episode);
-    } else if (!sharedAudioRef && audioRef.current) {
-      audioRef.current.src = episode.audioSrc;
-    }
+    if (sharedAudioRef && loadEpisode && currentEpisode?.guid !== episode.guid) loadEpisode(episode);
+    else if (!sharedAudioRef && audioRef.current) audioRef.current.src = episode.audioSrc;
   }, [episode?.guid]);
 
   useEffect(() => {
@@ -129,14 +132,13 @@ function PlayerPage({
     setTimeout(() => { handleTranscribe(); }, 1200);
   }, [episode]);
 
-  /* Local audio events (fallback when no shared audio) */
   useEffect(() => {
     if (sharedAudioRef) return;
     const audio = audioRef.current;
     if (!audio) return;
-    function onTimeUpdate() { setLocalCurrentTime(audio.currentTime); }
-    function onDurationChange() { setLocalDuration(audio.duration || 0); }
-    function onEnded() { setLocalIsPlaying(false); setShowSuggested(true); fetchSuggestedPodcasts(); }
+    const onTimeUpdate = () => setLocalCurrentTime(audio.currentTime);
+    const onDurationChange = () => setLocalDuration(audio.duration || 0);
+    const onEnded = () => { setLocalIsPlaying(false); setShowSuggested(true); fetchSuggestedPodcasts(); };
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("durationchange", onDurationChange);
     audio.addEventListener("ended", onEnded);
@@ -149,8 +151,7 @@ function PlayerPage({
 
   useEffect(() => {
     if (!episode) return;
-    const key = `notes_${episode.guid || episode.id}`;
-    const stored = localStorage.getItem(key);
+    const stored = localStorage.getItem(`notes_${episode.guid || episode.id}`);
     if (stored) setSavedNotes(JSON.parse(stored));
   }, [episode]);
 
@@ -165,9 +166,8 @@ function PlayerPage({
   /* ── AUDIO CONTROLS ── */
   function handlePlayPause() {
     if (sharedHandlePlayPause) { sharedHandlePlayPause(); return; }
-    const audio = audioRef.current;
-    if (localIsPlaying) { audio.pause(); setLocalIsPlaying(false); }
-    else { audio.play().then(() => setLocalIsPlaying(true)).catch(() => {}); }
+    if (localIsPlaying) { audioRef.current.pause(); setLocalIsPlaying(false); }
+    else { audioRef.current.play().then(() => setLocalIsPlaying(true)).catch(() => {}); }
   }
   function handleRewind() { audioRef.current.currentTime -= 10; }
   function handleFastForward() { audioRef.current.currentTime += 10; }
@@ -177,14 +177,12 @@ function PlayerPage({
     if (sharedSetIsPlaying) sharedSetIsPlaying(true); else setLocalIsPlaying(true);
   }
   function handleProgressClick(e) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const newTime = ((e.clientX - rect.left) / rect.width) * duration;
+    const newTime = ((e.clientX - e.currentTarget.getBoundingClientRect().left) / e.currentTarget.getBoundingClientRect().width) * duration;
     if (handleSeek) handleSeek(newTime); else { audioRef.current.currentTime = newTime; setLocalCurrentTime(newTime); }
   }
-
-  function formatTime(seconds) {
-    if (!seconds || isNaN(seconds)) return "0:00";
-    return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
+  function formatTime(s) {
+    if (!s || isNaN(s)) return "0:00";
+    return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
   }
 
   /* ── BOOKMARK ── */
@@ -199,23 +197,14 @@ function PlayerPage({
     setMarkedMoments([...markedMoments, { time: line.time, text: line.text, type, aiNote, userNote: "" }]);
     setMarkingLine(null);
   }
-
   async function generateBookmarkNote(line, type) {
     try {
-      const res = await fetch("http://localhost:3001/api/bookmark-note", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: line.text, time: line.time, type, episodeTitle: episode.title }),
-      });
+      const res = await fetch("http://localhost:3001/api/bookmark-note", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: line.text, time: line.time, type, episodeTitle: episode.title }) });
       return (await res.json()).note || "";
     } catch { return ""; }
   }
-
   function isMarked(line) { return markedMoments.find((m) => m.time === line.time) || null; }
-  function markColor(type) {
-    if (type === "important") return colors.amber;
-    if (type === "confusing") return colors.red;
-    return colors.purple;
-  }
+  function markColor(type) { return type === "important" ? colors.amber : type === "confusing" ? colors.red : colors.purple; }
 
   /* ── NOTES ── */
   function handleSaveNotes() {
@@ -223,14 +212,11 @@ function PlayerPage({
     const key = `notes_${episode.guid || episode.id}`;
     const newNote = { id: Date.now(), text: notes, timestamp: currentTime, writtenAt: new Date().toLocaleString("en-GB"), episodeTitle: episode.title, episodeGuid: episode.guid || episode.id, podcastImage: episode.image };
     const updated = [...savedNotes, newNote];
-    setSavedNotes(updated);
-    localStorage.setItem(key, JSON.stringify(updated));
+    setSavedNotes(updated); localStorage.setItem(key, JSON.stringify(updated));
     const library = JSON.parse(localStorage.getItem("notes_library") || "[]");
     library.push(newNote); localStorage.setItem("notes_library", JSON.stringify(library));
-    setNotes(""); setNoteSaved(true);
-    setTimeout(() => setNoteSaved(false), 2000);
+    setNotes(""); setNoteSaved(true); setTimeout(() => setNoteSaved(false), 2000);
   }
-
   function handleDeleteNote(noteId) {
     const key = `notes_${episode.guid || episode.id}`;
     const updated = savedNotes.filter((n) => n.id !== noteId);
@@ -292,8 +278,10 @@ function PlayerPage({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
       setTranscript(data.transcript);
-      setIsGeneratingInsights(true);
-      setIsGeneratingChapters(true);
+      /* Store the speaker name map from Claude */
+      if (data.speakerMap) setSpeakerMap(data.speakerMap);
+
+      setIsGeneratingInsights(true); setIsGeneratingChapters(true);
       const [insightsRes, chaptersRes] = await Promise.all([
         fetch("http://localhost:3001/api/insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transcript: data.fullText, lines: data.transcript }) }),
         fetch("http://localhost:3001/api/chapters", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transcript: data.fullText, lines: data.transcript }) }),
@@ -320,8 +308,7 @@ function PlayerPage({
   async function handleGenerateInsights() {
     setIsGeneratingInsights(true);
     try {
-      const textToAnalyse = transcript.length > 0 ? transcript.map((l) => l.text).join(" ") : episode.description;
-      const res = await fetch("http://localhost:3001/api/insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transcript: textToAnalyse, lines: transcript }) });
+      const res = await fetch("http://localhost:3001/api/insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transcript: transcript.length > 0 ? transcript.map((l) => l.text).join(" ") : episode.description, lines: transcript }) });
       const data = await res.json();
       if (data.insights) setInsights(data.insights);
     } catch (err) { console.error(err); }
@@ -336,26 +323,21 @@ function PlayerPage({
     } catch { }
   }
 
-  /* ── BUILD CHAPTERED TRANSCRIPT ── */
+  /* ── CHAPTERED TRANSCRIPT ── */
   function buildChapteredTranscript() {
     if (!chapters.length) return [{ chapter: null, lines: transcript }];
     const groups = [];
-    let currentChapter = null;
-    let currentLines = [];
+    let currentChapter = null; let currentLines = [];
     for (const line of transcript) {
       const newChapter = chapters.find((c) => line.time >= c.timestamp && (!currentChapter || c.timestamp > currentChapter.timestamp));
       if (newChapter && newChapter !== currentChapter) {
         if (currentLines.length > 0) groups.push({ chapter: currentChapter, lines: currentLines });
-        currentChapter = newChapter;
-        currentLines = [line];
-      } else {
-        currentLines.push(line);
-      }
+        currentChapter = newChapter; currentLines = [line];
+      } else { currentLines.push(line); }
     }
     if (currentLines.length > 0) groups.push({ chapter: currentChapter, lines: currentLines });
     return groups;
   }
-
   const chapteredTranscript = buildChapteredTranscript();
 
   /* ── THEME ── */
@@ -363,15 +345,11 @@ function PlayerPage({
   const c = dark ? {
     bg: colors.bg, card: colors.bgCard, cardHover: colors.bgCardHover,
     text: colors.textPrimary, textSub: colors.textSecondary, textMuted: colors.textMuted,
-    border: colors.border, borderAccent: colors.borderAccent,
-    navBg: "rgba(15,15,18,0.92)", inputBg: colors.bgInput,
-    activeLine: "rgba(139,92,246,0.12)",
+    border: colors.border, borderAccent: colors.borderAccent, navBg: "rgba(15,15,18,0.92)", inputBg: colors.bgInput,
   } : {
     bg: "#f8f7f4", card: "#ffffff", cardHover: "#f8f7ff",
     text: "#1a1a2e", textSub: "#555", textMuted: "#999",
-    border: "#ebebeb", borderAccent: "rgba(108,71,255,0.3)",
-    navBg: "rgba(255,255,255,0.95)", inputBg: "#fafafa",
-    activeLine: "#f0edff",
+    border: "#ebebeb", borderAccent: "rgba(108,71,255,0.3)", navBg: "rgba(255,255,255,0.95)", inputBg: "#fafafa",
   };
 
   /* ─────────────────────────────────────────────────────────────
@@ -379,16 +357,15 @@ function PlayerPage({
   ───────────────────────────────────────────────────────────── */
   return (
     <div style={{ minHeight: "100vh", background: c.bg, color: c.text, fontFamily: fonts.body, paddingBottom: "6rem" }}>
-
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap');
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-        @keyframes fadeUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes bookmarkPop { 0%{transform:scale(1)} 40%{transform:scale(1.5)} 100%{transform:scale(1)} }
-        @keyframes activeLinePulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
-        * { box-sizing:border-box; }
-        ::placeholder { color: #6B6B7A; }
-        ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:#444;border-radius:4px}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes bookmarkPop{0%{transform:scale(1)}40%{transform:scale(1.5)}100%{transform:scale(1)}}
+        @keyframes activePulse{0%,100%{opacity:1}50%{opacity:0.6}}
+        *{box-sizing:border-box}
+        ::placeholder{color:#6B6B7A}
+        ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#444;border-radius:4px}
       `}</style>
 
       {/* ── NAV ── */}
@@ -415,7 +392,6 @@ function PlayerPage({
         <div style={{ position: "absolute", inset: 0, background: "rgba(15,15,18,0.5)" }} />
         <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.2) 0%, transparent 70%)" }} />
         <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "200px", background: `linear-gradient(to bottom, transparent, ${c.bg})` }} />
-
         <div style={{ position: "absolute", bottom: "2.5rem", left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "900px", padding: "0 2rem", display: "flex", gap: "2rem", alignItems: "flex-end" }}>
           {episode.image && (
             <div style={{ position: "relative", flexShrink: 0 }}>
@@ -425,13 +401,17 @@ function PlayerPage({
           )}
           <div style={{ flex: 1, minWidth: 0 }}>
             <p style={{ color: colors.purple, fontSize: "0.65rem", fontWeight: "700", letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: "0.4rem" }}>Now Playing</p>
-            <h1 style={{ fontFamily: fonts.heading, fontSize: "clamp(1.3rem, 3.5vw, 2.2rem)", fontWeight: "800", color: "#fff", marginBottom: "0.6rem", textShadow: "0 2px 20px rgba(0,0,0,0.8)", letterSpacing: "-0.02em", lineHeight: 1.1 }}>
-              {episode.title}
-            </h1>
+            <h1 style={{ fontFamily: fonts.heading, fontSize: "clamp(1.3rem, 3.5vw, 2.2rem)", fontWeight: "800", color: "#fff", marginBottom: "0.6rem", textShadow: "0 2px 20px rgba(0,0,0,0.8)", letterSpacing: "-0.02em", lineHeight: 1.1 }}>{episode.title}</h1>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               <span style={{ background: "rgba(139,92,246,0.25)", border: "1px solid rgba(139,92,246,0.4)", color: colors.purpleLight, fontSize: "0.65rem", fontWeight: "700", padding: "0.2rem 0.65rem", borderRadius: "20px" }}>✦ AI Transcribed</span>
               {transcript.length > 0 && <span style={{ background: "rgba(110,231,183,0.15)", border: "1px solid rgba(110,231,183,0.3)", color: colors.teal, fontSize: "0.65rem", fontWeight: "600", padding: "0.2rem 0.65rem", borderRadius: "20px" }}>{transcript.length} lines</span>}
               {chapters.length > 0 && <span style={{ background: "rgba(96,165,250,0.15)", border: "1px solid rgba(96,165,250,0.3)", color: colors.blue, fontSize: "0.65rem", fontWeight: "600", padding: "0.2rem 0.65rem", borderRadius: "20px" }}>{chapters.length} chapters</span>}
+              {/* Show speaker names as badges if detected */}
+              {Object.values(speakerMap).length > 0 && Object.values(speakerMap).map((name, i) => (
+                <span key={i} style={{ background: `${SPEAKER_COLOURS[i % SPEAKER_COLOURS.length].bg}`, border: `1px solid ${SPEAKER_COLOURS[i % SPEAKER_COLOURS.length].border}`, color: SPEAKER_COLOURS[i % SPEAKER_COLOURS.length].text, fontSize: "0.65rem", fontWeight: "600", padding: "0.2rem 0.65rem", borderRadius: "20px" }}>
+                  {name}
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -439,21 +419,11 @@ function PlayerPage({
 
       {!sharedAudioRef && <audio ref={localAudioRef} src={episode.audioSrc} />}
 
-      {/* ── PLAYER CONTROLS — bigger and more prominent ── */}
+      {/* ── PLAYER CONTROLS ── */}
       <div style={{ maxWidth: "620px", margin: "-0.5rem auto 2rem", padding: "0 2rem" }}>
-        <div style={{
-          background: dark ? colors.bgCard : "#fff",
-          borderRadius: "24px",
-          padding: "1.75rem 2.5rem",
-          boxShadow: dark ? `0 8px 48px rgba(0,0,0,0.4), ${effects.glowPurple}` : "0 8px 40px rgba(108,71,255,0.12)",
-          border: `1px solid ${c.border}`,
-        }}>
-          {/* Progress bar — taller and easier to click */}
+        <div style={{ background: dark ? colors.bgCard : "#fff", borderRadius: "24px", padding: "1.75rem 2.5rem", boxShadow: dark ? `0 8px 48px rgba(0,0,0,0.4), ${effects.glowPurple}` : "0 8px 40px rgba(108,71,255,0.12)", border: `1px solid ${c.border}` }}>
           <div style={{ marginBottom: "1.25rem" }}>
-            <div
-              onClick={handleProgressClick}
-              style={{ width: "100%", height: "6px", background: dark ? "rgba(255,255,255,0.1)" : "#ebebeb", borderRadius: "3px", cursor: "pointer", position: "relative", marginBottom: "0.6rem" }}
-            >
+            <div onClick={handleProgressClick} style={{ width: "100%", height: "6px", background: dark ? "rgba(255,255,255,0.1)" : "#ebebeb", borderRadius: "3px", cursor: "pointer", position: "relative", marginBottom: "0.6rem" }}>
               <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${duration ? (currentTime / duration) * 100 : 0}%`, background: `linear-gradient(90deg, ${colors.purple}, ${colors.purpleLight})`, borderRadius: "3px", transition: "width 0.1s linear" }} />
               <div style={{ position: "absolute", top: "50%", left: `${duration ? (currentTime / duration) * 100 : 0}%`, transform: "translate(-50%,-50%)", width: "18px", height: "18px", borderRadius: "50%", background: colors.purpleLight, boxShadow: `0 0 0 3px ${c.bg}, 0 0 12px ${colors.purple}` }} />
             </div>
@@ -462,48 +432,27 @@ function PlayerPage({
               <span style={{ color: c.textMuted, fontSize: "0.78rem", fontFamily: fonts.mono }}>{formatTime(duration)}</span>
             </div>
           </div>
-
-          {/* Playback buttons — larger */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "2rem" }}>
-            {/* Rewind */}
             <button onClick={handleRewind} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem", borderRadius: "12px", transition: "background 0.15s" }}
               onMouseEnter={(e) => { e.currentTarget.style.background = dark ? "rgba(255,255,255,0.06)" : "#f0f0f0"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c.textSub} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.51" />
-              </svg>
-              <span style={{ fontSize: "0.65rem", color: c.textMuted, marginTop: "3px", fontFamily: fonts.body }}>10s</span>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c.textSub} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.51" /></svg>
+              <span style={{ fontSize: "0.65rem", color: c.textMuted, marginTop: "3px" }}>10s</span>
             </button>
-
-            {/* Play/Pause — big */}
-            <button
-              onClick={handlePlayPause}
-              style={{
-                width: "76px", height: "76px", borderRadius: "50%",
-                background: `linear-gradient(135deg, ${colors.purple}, ${colors.purpleLight})`,
-                border: "none", cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                boxShadow: `0 8px 32px rgba(139,92,246,0.5)`,
-                transition: "transform 0.15s, box-shadow 0.2s",
-              }}
+            <button onClick={handlePlayPause} style={{ width: "76px", height: "76px", borderRadius: "50%", background: `linear-gradient(135deg, ${colors.purple}, ${colors.purpleLight})`, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 8px 32px rgba(139,92,246,0.5)", transition: "transform 0.15s, box-shadow 0.2s" }}
               onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.08)"; e.currentTarget.style.boxShadow = "0 12px 40px rgba(139,92,246,0.6)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 8px 32px rgba(139,92,246,0.5)"; }}
-            >
+              onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 8px 32px rgba(139,92,246,0.5)"; }}>
               {isPlaying ? (
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
               ) : (
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><polygon points="6,3 20,12 6,21" /></svg>
               )}
             </button>
-
-            {/* Fast forward */}
             <button onClick={handleFastForward} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", padding: "0.5rem", borderRadius: "12px", transition: "background 0.15s" }}
               onMouseEnter={(e) => { e.currentTarget.style.background = dark ? "rgba(255,255,255,0.06)" : "#f0f0f0"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c.textSub} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-.49-3.51" />
-              </svg>
-              <span style={{ fontSize: "0.65rem", color: c.textMuted, marginTop: "3px", fontFamily: fonts.body }}>10s</span>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={c.textSub} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-.49-3.51" /></svg>
+              <span style={{ fontSize: "0.65rem", color: c.textMuted, marginTop: "3px" }}>10s</span>
             </button>
           </div>
         </div>
@@ -515,7 +464,7 @@ function PlayerPage({
           <div style={{ background: dark ? colors.purpleDim : "#f0edff", border: `1px solid ${c.borderAccent}`, borderRadius: "10px", padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
             <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: colors.purple, animation: "pulse 1.2s infinite" }} />
             <p style={{ color: colors.purple, fontSize: "0.85rem", margin: 0 }}>
-              {isTranscribing ? "Generating transcript — 1-2 minutes..." : isGeneratingChapters ? "Generating AI chapters..." : "Extracting insights..."}
+              {isTranscribing ? "Generating transcript & identifying speakers — 1-2 minutes..." : isGeneratingChapters ? "Generating AI chapters..." : "Extracting insights..."}
             </p>
           </div>
         </div>
@@ -525,14 +474,7 @@ function PlayerPage({
       <div style={{ maxWidth: "960px", margin: "0 auto", padding: "0 2rem 1rem" }}>
         <div style={{ display: "flex", gap: "2px", background: dark ? colors.bgCard : "#ebebeb", border: `1px solid ${c.border}`, borderRadius: "12px", padding: "3px", width: "fit-content" }}>
           {[{ key: "transcript", label: "Transcript" }, { key: "insights", label: "Summary & Insights" }, { key: "notes", label: "My Notes" }].map((tab) => (
-            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-              background: activeTab === tab.key ? (dark ? colors.purpleDim : "#fff") : "transparent",
-              color: activeTab === tab.key ? (dark ? colors.purpleLight : "#1a1a2e") : c.textMuted,
-              border: activeTab === tab.key ? `1px solid ${c.borderAccent}` : "1px solid transparent",
-              padding: "0.5rem 1.25rem", borderRadius: "9px", cursor: "pointer",
-              fontSize: "0.85rem", fontWeight: activeTab === tab.key ? "600" : "400",
-              transition: "all 0.15s", fontFamily: fonts.body,
-            }}>{tab.label}</button>
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{ background: activeTab === tab.key ? (dark ? colors.purpleDim : "#fff") : "transparent", color: activeTab === tab.key ? (dark ? colors.purpleLight : "#1a1a2e") : c.textMuted, border: activeTab === tab.key ? `1px solid ${c.borderAccent}` : "1px solid transparent", padding: "0.5rem 1.25rem", borderRadius: "9px", cursor: "pointer", fontSize: "0.85rem", fontWeight: activeTab === tab.key ? "600" : "400", transition: "all 0.15s", fontFamily: fonts.body }}>{tab.label}</button>
           ))}
         </div>
       </div>
@@ -543,7 +485,6 @@ function PlayerPage({
         {/* ══ TRANSCRIPT PANEL ══ */}
         {activeTab === "transcript" && (
           <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-
             <div style={{ flex: 1, background: c.card, borderRadius: "16px", padding: "1.75rem", border: `1px solid ${c.border}`, boxShadow: dark ? "0 4px 24px rgba(0,0,0,0.3)" : "0 2px 12px rgba(0,0,0,0.04)", minWidth: 0 }}>
 
               {/* Word search */}
@@ -553,9 +494,7 @@ function PlayerPage({
                   <input value={wordSearch} onChange={(e) => setWordSearch(e.target.value)} placeholder="Type a word to define..." style={{ flex: 1, background: dark ? colors.bgInput : "#fafafa", border: `1px solid ${c.border}`, borderRadius: "8px", color: c.text, fontSize: "0.88rem", fontFamily: fonts.body, outline: "none", padding: "0.65rem 0.9rem" }} />
                   <button type="submit" style={{ ...btnPrimary, padding: "0.65rem 1.1rem" }}
                     onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.88"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}>
-                    {isSearchingWord ? "..." : "Define"}
-                  </button>
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}>{isSearchingWord ? "..." : "Define"}</button>
                 </form>
                 {wordDefinition && (
                   <div style={{ marginTop: "0.75rem", background: dark ? colors.purpleDim : "#f8f7ff", border: `1px solid ${c.borderAccent}`, borderRadius: "10px", padding: "0.9rem 1rem" }}>
@@ -580,10 +519,10 @@ function PlayerPage({
                   <h2 style={{ fontSize: "1rem", fontWeight: "700", color: c.text, marginBottom: "0.2rem", fontFamily: fonts.heading }}>
                     Transcript
                     {isTranscribing && <span style={{ color: colors.purple, fontSize: "0.75rem", fontWeight: "400", marginLeft: "0.75rem" }}>Generating...</span>}
-                    {transcript.length > 0 && !isTranscribing && <span style={{ color: c.textMuted, fontSize: "0.75rem", fontWeight: "400", marginLeft: "0.75rem" }}>{transcript.length} lines · {chapters.length} chapters</span>}
+                    {transcript.length > 0 && !isTranscribing && <span style={{ color: c.textMuted, fontSize: "0.75rem", fontWeight: "400", marginLeft: "0.75rem" }}>{transcript.length} lines · {chapters.length} chapters · {Object.keys(speakerMap).length} speakers</span>}
                   </h2>
                   <p style={{ color: c.textMuted, fontSize: "0.78rem" }}>
-                    {transcriptExpanded ? "Auto-syncing with audio · hover highlighted words · click to pin" : "Click to expand · syncs with playback · chapters inside"}
+                    {transcriptExpanded ? "Auto-syncing with audio · speakers colour-coded · hover to explore" : "Click to expand · speakers detected · auto-scrolls with audio"}
                   </p>
                 </div>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: transcriptExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", flexShrink: 0 }}>
@@ -594,18 +533,34 @@ function PlayerPage({
               {transcriptExpanded && (
                 <div>
                   {transcribeError && <p style={{ color: colors.red, fontSize: "0.85rem", marginBottom: "1rem" }}>{transcribeError}</p>}
-                  {isTranscribing && <div style={{ padding: "2rem", textAlign: "center", color: c.textMuted, background: dark ? "rgba(255,255,255,0.02)" : "#fafafa", borderRadius: "10px" }}><p>Generating transcript in the background...</p></div>}
+                  {isTranscribing && <div style={{ padding: "2rem", textAlign: "center", color: c.textMuted, background: dark ? "rgba(255,255,255,0.02)" : "#fafafa", borderRadius: "10px" }}><p>Generating transcript & identifying speakers...</p></div>}
                   {transcript.length === 0 && !isTranscribing && <div style={{ padding: "2rem", textAlign: "center", color: c.textMuted, background: dark ? "rgba(255,255,255,0.02)" : "#fafafa", borderRadius: "10px" }}><p>No transcript available yet.</p></div>}
+
+                  {/* Speaker legend */}
+                  {Object.keys(speakerMap).length > 0 && (
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem", padding: "0.75rem 1rem", background: dark ? "rgba(255,255,255,0.02)" : "#fafafa", borderRadius: "10px", border: `1px solid ${c.border}` }}>
+                      <span style={{ color: c.textMuted, fontSize: "0.72rem", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.08em", alignSelf: "center" }}>Speakers:</span>
+                      {Object.entries(speakerMap).map(([id, name], i) => {
+                        const col = SPEAKER_COLOURS[i % SPEAKER_COLOURS.length];
+                        return (
+                          <span key={id} style={{ background: col.bg, border: `1px solid ${col.border}`, color: col.text, fontSize: "0.75rem", fontWeight: "600", padding: "0.2rem 0.65rem", borderRadius: "20px", display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: col.dot, display: "inline-block" }} />
+                            {name}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Hint banner */}
                   {insights.length > 0 && transcript.length > 0 && (
                     <div style={{ background: dark ? colors.purpleDim : "#f0edff", border: `1px solid ${c.borderAccent}`, borderRadius: "8px", padding: "0.55rem 1rem", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                       <span style={{ background: "rgba(139,92,246,0.2)", borderBottom: `2px solid ${colors.purple}`, color: colors.purpleLight, fontSize: "0.75rem", fontWeight: "600", padding: "0 3px", borderRadius: "2px" }}>highlighted words</span>
-                      <p style={{ color: colors.purple, fontSize: "0.75rem", margin: 0 }}>— hover for info · click to pin card · transcript auto-scrolls with audio</p>
+                      <p style={{ color: colors.purple, fontSize: "0.75rem", margin: 0 }}>— hover for info · click to pin · transcript auto-scrolls with audio</p>
                     </div>
                   )}
 
-                  {/* Marked moments summary */}
+                  {/* Marked moments */}
                   {markedMoments.length > 0 && (
                     <div style={{ background: dark ? "rgba(245,158,11,0.06)" : "#fffbf0", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "10px", padding: "1rem 1.25rem", marginBottom: "1.25rem" }}>
                       <p style={{ color: colors.amber, fontSize: "0.68rem", fontWeight: "700", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "0.75rem" }}>Marked Moments ({markedMoments.length})</p>
@@ -627,8 +582,8 @@ function PlayerPage({
                     </div>
                   )}
 
-                  {/* ── SCROLLABLE TRANSCRIPT CONTAINER ── */}
-                  <div ref={transcriptScrollRef} style={{ maxHeight: "60vh", overflowY: "auto", paddingRight: "4px" }}>
+                  {/* ── SCROLLABLE TRANSCRIPT ── */}
+                  <div ref={transcriptScrollRef} style={{ maxHeight: "65vh", overflowY: "auto", paddingRight: "4px" }}>
                     {chapteredTranscript.map((group, groupIndex) => (
                       <div key={groupIndex}>
 
@@ -647,127 +602,108 @@ function PlayerPage({
                           </div>
                         )}
 
-                        {/* Transcript lines */}
+                        {/* ── TRANSCRIPT LINES with speaker display ── */}
                         {group.lines.map((line, lineIndex) => {
-                          /* Find the global index of this line for active detection */
                           const globalIndex = transcript.indexOf(line);
                           const isActive = globalIndex === activeLineIndex;
                           const mark = isMarked(line);
-                          const { speaker, text: lineText } = parseSpeaker(line.text);
-                          const speakerColor = speaker ? speakerColors[speaker] : null;
+                          const hasSpeaker = !!line.speaker;
+                          const speakerName = hasSpeaker ? getSpeakerName(line.speaker) : null;
+                          const speakerCol = hasSpeaker ? getSpeakerColour(line.speaker) : null;
+
+                          /* Check if previous line has same speaker — if so don't repeat the label */
+                          const prevLine = globalIndex > 0 ? transcript[globalIndex - 1] : null;
+                          const showSpeakerLabel = hasSpeaker && prevLine?.speaker !== line.speaker;
 
                           return (
                             <div
                               key={lineIndex}
                               ref={(el) => { if (globalIndex >= 0) lineRefs.current[globalIndex] = el; }}
                               onClick={(e) => e.stopPropagation()}
-                              style={{
-                                display: "flex", gap: "0.75rem", alignItems: "flex-start",
-                                padding: "0.75rem 0.75rem",
-                                marginBottom: "2px",
-                                borderRadius: "10px",
-                                /* Active line gets a strong highlight */
-                                background: isActive
-                                  ? (dark ? "rgba(139,92,246,0.15)" : "#f0edff")
-                                  : mark
-                                  ? (mark.type === "important" ? "rgba(245,158,11,0.07)" : "rgba(239,68,68,0.07)")
-                                  : "transparent",
-                                border: isActive
-                                  ? `1px solid ${c.borderAccent}`
-                                  : mark
-                                  ? (mark.type === "important" ? "1px solid rgba(245,158,11,0.25)" : "1px solid rgba(239,68,68,0.25)")
-                                  : "1px solid transparent",
-                                transition: "all 0.2s",
-                                position: "relative",
-                              }}
-                              onMouseEnter={(e) => { if (!isActive && !mark) e.currentTarget.style.background = dark ? colors.bgCardHover : "#f8f7f0"; }}
-                              onMouseLeave={(e) => { if (!isActive && !mark) e.currentTarget.style.background = "transparent"; }}
                             >
-                              {/* Active line indicator bar */}
-                              {isActive && (
-                                <div style={{ position: "absolute", left: 0, top: "20%", bottom: "20%", width: "3px", borderRadius: "2px", background: `linear-gradient(to bottom, ${colors.purple}, ${colors.purpleLight})`, animation: "activeLinePulse 1.5s infinite" }} />
+                              {/* ── SPEAKER LABEL — only shown when speaker changes ── */}
+                              {showSpeakerLabel && (
+                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.75rem 0 0.35rem", paddingLeft: "0.25rem" }}>
+                                  {/* Coloured dot */}
+                                  <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: speakerCol.dot, flexShrink: 0 }} />
+                                  {/* Speaker name badge */}
+                                  <span style={{ background: speakerCol.bg, border: `1px solid ${speakerCol.border}`, color: speakerCol.text, fontSize: "0.68rem", fontWeight: "700", padding: "0.15rem 0.6rem", borderRadius: "20px", letterSpacing: "0.04em" }}>
+                                    {speakerName}
+                                  </span>
+                                </div>
                               )}
 
-                              {/* Timestamp */}
-                              <span
-                                onClick={() => handleTimestampClick(line.time)}
+                              {/* ── TRANSCRIPT LINE ── */}
+                              <div
                                 style={{
-                                  background: isActive ? colors.purple : (dark ? colors.purpleDim : "#f0edff"),
-                                  color: isActive ? "#fff" : colors.purple,
-                                  padding: "0.15rem 0.5rem", borderRadius: "4px",
-                                  fontSize: "0.68rem", fontFamily: fonts.mono,
-                                  whiteSpace: "nowrap", marginTop: "4px", flexShrink: 0, cursor: "pointer",
-                                  transition: "all 0.2s",
-                                  fontWeight: isActive ? "700" : "400",
+                                  display: "flex", gap: "0.75rem", alignItems: "flex-start",
+                                  padding: "0.65rem 0.75rem", marginBottom: "2px", borderRadius: "10px",
+                                  background: isActive
+                                    ? (dark ? "rgba(139,92,246,0.15)" : "#f0edff")
+                                    : mark
+                                    ? (mark.type === "important" ? "rgba(245,158,11,0.07)" : "rgba(239,68,68,0.07)")
+                                    : "transparent",
+                                  border: isActive
+                                    ? `1px solid ${c.borderAccent}`
+                                    : mark
+                                    ? (mark.type === "important" ? "1px solid rgba(245,158,11,0.25)" : "1px solid rgba(239,68,68,0.25)")
+                                    : "1px solid transparent",
+                                  transition: "all 0.2s", position: "relative",
+                                  /* Indent lines slightly if they have a speaker */
+                                  paddingLeft: hasSpeaker ? "1.25rem" : "0.75rem",
+                                  /* Left border in speaker colour when active */
+                                  borderLeft: isActive
+                                    ? `3px solid ${colors.purple}`
+                                    : hasSpeaker && speakerCol
+                                    ? `3px solid ${speakerCol.dot}33`
+                                    : "3px solid transparent",
                                 }}
+                                onMouseEnter={(e) => { if (!isActive && !mark) e.currentTarget.style.background = dark ? colors.bgCardHover : "#f8f7f0"; }}
+                                onMouseLeave={(e) => { if (!isActive && !mark) e.currentTarget.style.background = "transparent"; }}
                               >
-                                {formatTime(line.time)}
-                              </span>
-
-                              {/* Text block */}
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                {/* Speaker label — shown if detected */}
-                                {speaker && (
-                                  <p style={{ fontSize: "0.65rem", fontWeight: "700", letterSpacing: "0.08em", textTransform: "uppercase", color: speakerColor, marginBottom: "0.2rem" }}>
-                                    {speaker}
-                                  </p>
+                                {/* Active pulse bar */}
+                                {isActive && (
+                                  <div style={{ position: "absolute", left: 0, top: "15%", bottom: "15%", width: "3px", borderRadius: "2px", background: `linear-gradient(to bottom, ${colors.purple}, ${colors.purpleLight})`, animation: "activePulse 1.5s infinite" }} />
                                 )}
-                                <p
-                                  onClick={() => handleTimestampClick(line.time)}
-                                  style={{
-                                    color: isActive ? c.text : c.textSub,
-                                    fontSize: isActive ? "0.93rem" : "0.9rem",
-                                    margin: 0, lineHeight: 1.65,
-                                    cursor: "pointer",
-                                    fontWeight: isActive ? "500" : "400",
-                                    transition: "all 0.2s",
-                                  }}
-                                >
-                                  {renderHighlightedLine(speaker ? lineText : line.text)}
+
+                                {/* Timestamp */}
+                                <span onClick={() => handleTimestampClick(line.time)} style={{ background: isActive ? colors.purple : (dark ? colors.purpleDim : "#f0edff"), color: isActive ? "#fff" : colors.purple, padding: "0.15rem 0.5rem", borderRadius: "4px", fontSize: "0.68rem", fontFamily: fonts.mono, whiteSpace: "nowrap", marginTop: "4px", flexShrink: 0, cursor: "pointer", transition: "all 0.2s", fontWeight: isActive ? "700" : "400" }}>
+                                  {formatTime(line.time)}
+                                </span>
+
+                                {/* Text */}
+                                <p onClick={() => handleTimestampClick(line.time)} style={{ color: isActive ? c.text : c.textSub, fontSize: isActive ? "0.93rem" : "0.9rem", margin: 0, lineHeight: 1.65, flex: 1, cursor: "pointer", fontWeight: isActive ? "500" : "400", transition: "all 0.2s" }}>
+                                  {renderHighlightedLine(line.text)}
                                 </p>
-                              </div>
 
-                              {/* ── BOOKMARK BUTTON — always visible, not hidden ── */}
-                              <div style={{ position: "relative", flexShrink: 0 }}>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setMarkingLine(markingLine === line.time ? null : line.time); }}
-                                  title="Mark as important or confusing"
-                                  style={{
-                                    background: mark
-                                      ? (mark.type === "important" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)")
-                                      : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"),
-                                    border: mark
-                                      ? `1.5px solid ${markColor(mark.type)}`
-                                      : `1.5px solid ${c.border}`,
-                                    borderRadius: "8px",
-                                    cursor: "pointer",
-                                    padding: "0.35rem 0.45rem",
-                                    display: "flex", alignItems: "center", justifyContent: "center",
-                                    transition: "all 0.2s",
-                                  }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = colors.purple; e.currentTarget.style.background = dark ? "rgba(139,92,246,0.15)" : "#f0edff"; }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.borderColor = mark ? markColor(mark.type) : c.border;
-                                    e.currentTarget.style.background = mark ? (mark.type === "important" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)") : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)");
-                                  }}
-                                >
-                                  <svg width="15" height="15" viewBox="0 0 24 24"
-                                    fill={mark ? markColor(mark.type) : "none"}
-                                    stroke={mark ? markColor(mark.type) : c.textMuted}
-                                    strokeWidth="2"
-                                    style={{ animation: mark ? "bookmarkPop 0.3s ease" : "none" }}>
-                                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                                  </svg>
-                                </button>
+                                {/* Bookmark button — always visible */}
+                                <div style={{ position: "relative", flexShrink: 0 }}>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setMarkingLine(markingLine === line.time ? null : line.time); }}
+                                    title="Mark as important or confusing"
+                                    style={{
+                                      background: mark ? (mark.type === "important" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)") : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"),
+                                      border: mark ? `1.5px solid ${markColor(mark.type)}` : `1.5px solid ${c.border}`,
+                                      borderRadius: "8px", cursor: "pointer", padding: "0.35rem 0.45rem",
+                                      display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.2s",
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = colors.purple; e.currentTarget.style.background = dark ? "rgba(139,92,246,0.15)" : "#f0edff"; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = mark ? markColor(mark.type) : c.border; e.currentTarget.style.background = mark ? (mark.type === "important" ? "rgba(245,158,11,0.2)" : "rgba(239,68,68,0.2)") : (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)"); }}
+                                  >
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill={mark ? markColor(mark.type) : "none"} stroke={mark ? markColor(mark.type) : c.textMuted} strokeWidth="2" style={{ animation: mark ? "bookmarkPop 0.3s ease" : "none" }}>
+                                      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                                    </svg>
+                                  </button>
 
-                                {/* Mark type picker */}
-                                {markingLine === line.time && (
-                                  <div style={{ position: "absolute", right: 0, top: "110%", background: dark ? colors.bgCard : "#fff", border: `1px solid ${c.border}`, borderRadius: "10px", padding: "0.5rem", boxShadow: "0 8px 32px rgba(0,0,0,0.3)", zIndex: 50, display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: "150px" }}>
-                                    <button onClick={(e) => { e.stopPropagation(); handleMark(line, "important"); }} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "7px", padding: "0.5rem 0.75rem", color: colors.amber, fontSize: "0.8rem", fontWeight: "600", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>⭐ Important</button>
-                                    <button onClick={(e) => { e.stopPropagation(); handleMark(line, "confusing"); }} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "7px", padding: "0.5rem 0.75rem", color: colors.red, fontSize: "0.8rem", fontWeight: "600", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>❓ Confusing</button>
-                                    {mark && <button onClick={(e) => { e.stopPropagation(); setMarkedMoments(markedMoments.filter((m) => m.time !== line.time)); setMarkingLine(null); }} style={{ background: "none", border: `1px solid ${c.border}`, borderRadius: "7px", padding: "0.5rem 0.75rem", color: c.textMuted, fontSize: "0.78rem", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>Remove mark</button>}
-                                  </div>
-                                )}
+                                  {/* Mark type picker */}
+                                  {markingLine === line.time && (
+                                    <div style={{ position: "absolute", right: 0, top: "110%", background: dark ? colors.bgCard : "#fff", border: `1px solid ${c.border}`, borderRadius: "10px", padding: "0.5rem", boxShadow: "0 8px 32px rgba(0,0,0,0.3)", zIndex: 50, display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: "150px" }}>
+                                      <button onClick={(e) => { e.stopPropagation(); handleMark(line, "important"); }} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: "7px", padding: "0.5rem 0.75rem", color: colors.amber, fontSize: "0.8rem", fontWeight: "600", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>⭐ Important</button>
+                                      <button onClick={(e) => { e.stopPropagation(); handleMark(line, "confusing"); }} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "7px", padding: "0.5rem 0.75rem", color: colors.red, fontSize: "0.8rem", fontWeight: "600", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>❓ Confusing</button>
+                                      {mark && <button onClick={(e) => { e.stopPropagation(); setMarkedMoments(markedMoments.filter((m) => m.time !== line.time)); setMarkingLine(null); }} style={{ background: "none", border: `1px solid ${c.border}`, borderRadius: "7px", padding: "0.5rem 0.75rem", color: c.textMuted, fontSize: "0.78rem", cursor: "pointer", textAlign: "left", fontFamily: fonts.body }}>Remove mark</button>}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -779,7 +715,7 @@ function PlayerPage({
               )}
             </div>
 
-            {/* ── PINNED ENTITY SIDE CARD ── */}
+            {/* Pinned entity side card */}
             {pinnedInsight && (
               <div style={{ width: "260px", flexShrink: 0, background: c.card, border: `1px solid ${c.borderAccent}`, borderRadius: "16px", padding: "1.25rem", boxShadow: dark ? effects.glowPurple : "0 4px 20px rgba(108,71,255,0.12)", position: "sticky", top: "90px", alignSelf: "flex-start" }}>
                 <button onClick={() => setPinnedInsight(null)} style={{ position: "absolute", top: "0.75rem", right: "0.75rem", background: "none", border: "none", cursor: "pointer", color: c.textMuted, fontSize: "1rem", lineHeight: 1 }}>✕</button>
@@ -864,8 +800,7 @@ function PlayerPage({
               {insights.map((insight, index) => (
                 <div key={index} onClick={() => handleTimestampClick(insight.timestamp)} style={{ display: "flex", gap: "1rem", alignItems: "flex-start", padding: "1rem 1.25rem", marginBottom: "0.5rem", background: dark ? colors.bgCardHover : "#fafafa", border: `1px solid ${c.border}`, borderRadius: "10px", cursor: "pointer", transition: "all 0.15s" }}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = c.borderAccent; e.currentTarget.style.background = dark ? colors.purpleDim : "#f8f7ff"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = c.border; e.currentTarget.style.background = dark ? colors.bgCardHover : "#fafafa"; }}
-                >
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = c.border; e.currentTarget.style.background = dark ? colors.bgCardHover : "#fafafa"; }}>
                   <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: dark ? colors.purpleDim : "#f0edff", border: `1px solid ${c.borderAccent}`, color: colors.purple, fontSize: "0.75rem", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{index + 1}</div>
                   <div style={{ minWidth: 0 }}>
                     <p style={{ color: c.text, fontSize: "0.92rem", fontWeight: "600", marginBottom: "0.2rem" }}>
@@ -927,7 +862,7 @@ function PlayerPage({
         )}
       </div>
 
-      {/* ── SUGGESTED PODCASTS ── */}
+      {/* Suggested podcasts */}
       {showSuggested && !suggestedHidden && (
         <div style={{ maxWidth: "960px", margin: "0 auto", padding: "0 2rem 3rem" }}>
           <div style={{ background: c.card, borderRadius: "16px", padding: "1.5rem", border: `1px solid ${c.border}` }}>
@@ -959,7 +894,7 @@ function PlayerPage({
 
       <p style={{ color: c.textMuted, fontSize: "0.75rem", textAlign: "center", paddingBottom: "2rem" }}>© 2025 PodPlayer</p>
 
-      {/* ── HOVER TOOLTIP ── */}
+      {/* Hover tooltip */}
       {hoveredInsight && !pinnedInsight && (
         <div style={{ position: "absolute", top: tooltipPos.y, left: Math.min(tooltipPos.x, window.innerWidth - 300), width: "280px", background: c.card, border: `1px solid ${c.borderAccent}`, borderRadius: "12px", padding: "0.9rem", boxShadow: dark ? effects.glowPurple : "0 8px 32px rgba(108,71,255,0.12)", zIndex: 9999, pointerEvents: "none" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>

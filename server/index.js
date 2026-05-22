@@ -587,6 +587,80 @@ app.post("/api/summary", async (req, res) => {
   res.json({ summary: msg.content[0]?.text || "" });
 });
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   ADD THIS ROUTE TO server/index.js
+   Paste it directly above the app.listen() line at the bottom.
+
+   POST /api/chapters
+   Sends the transcript to Claude and gets back AI-generated chapter markers
+   with timestamps and titles — shown inside the transcript panel.
+───────────────────────────────────────────────────────────────────────────── */
+app.post("/api/chapters", async (req, res) => {
+  const { transcript, lines } = req.body;
+
+  if (!transcript) {
+    return res.status(400).json({ error: "Missing transcript." });
+  }
+
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) {
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY not set." });
+  }
+
+  console.log("[server] Generating chapters with Claude...");
+
+  try {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.Anthropic({ apiKey: ANTHROPIC_KEY });
+
+    /* Build timestamped transcript for Claude to analyse */
+    const transcriptWithTimestamps = (lines || [])
+      .map((line) => `[${line.time}s] ${line.text}`)
+      .join("\n");
+
+    const prompt = `You are analysing a podcast transcript. Identify the main topic/chapter transitions in this podcast and generate chapter markers.
+
+Return a JSON array where each item has:
+- "timestamp": number of seconds where this chapter starts (from the [Xs] markers)
+- "title": short chapter title (3-6 words max)
+- "summary": one sentence describing what this section covers
+
+Return ONLY a valid JSON array. No markdown, no explanation. Maximum 8 chapters.
+
+Transcript:
+${transcriptWithTimestamps}`;
+
+    const message = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 800,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const rawText = message.content[0]?.text || "[]";
+    console.log("[server] Chapters raw response:", rawText.slice(0, 200));
+
+    let chapters = [];
+    try {
+      const cleaned = rawText.replace(/```json|```/g, "").trim();
+      chapters = JSON.parse(cleaned);
+    } catch (parseErr) {
+      console.error(
+        "[server] Failed to parse chapters JSON:",
+        parseErr.message,
+      );
+      chapters = [];
+    }
+
+    console.log(`[server] Generated ${chapters.length} chapters`);
+    res.json({ chapters });
+  } catch (err) {
+    console.error("[server] Chapters error:", err.message);
+    res
+      .status(502)
+      .json({ error: "Chapter generation failed: " + err.message });
+  }
+});
+
 /* ── START SERVER ──────────────────────────────────────────────────────────*/
 app.listen(PORT, () => {
   console.log(`✅ PodPlayer backend running at http://localhost:${PORT}`);

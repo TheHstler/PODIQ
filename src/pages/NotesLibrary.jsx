@@ -1,55 +1,33 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   src/pages/NotesLibrary.jsx  —  Notes Library Page
+   Dark premium redesign. All logic unchanged.
+───────────────────────────────────────────────────────────────────────────── */
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   NotesLibrary.jsx
-   A full page showing ALL notes the user has saved across every episode.
-   Each note shows: which podcast it came from, when it was written,
-   the audio timestamp it was written at, and the note text.
-   Users can delete notes or jump back to the episode.
-───────────────────────────────────────────────────────────────────────────── */
+import { colors, fonts, effects, card, btnPrimary, btnGhost, input, nav } from "../styles/theme";
 
 function NotesLibrary() {
   const navigate = useNavigate();
-
-  // All notes across all episodes, loaded from localStorage
   const [allNotes, setAllNotes] = useState([]);
-  // Search filter so user can find notes quickly
   const [search, setSearch] = useState("");
 
-  /* ── LOAD ALL NOTES FROM LOCALSTORAGE ON MOUNT ── */
   useEffect(() => {
     const library = JSON.parse(localStorage.getItem("notes_library") || "[]");
-    // Sort newest first
     library.sort((a, b) => b.id - a.id);
     setAllNotes(library);
   }, []);
 
-  /* ── DELETE A NOTE ── */
   function handleDelete(noteId, episodeGuid) {
-    // Remove from global library
     const library = JSON.parse(localStorage.getItem("notes_library") || "[]");
-    const updatedLibrary = library.filter((n) => n.id !== noteId);
-    localStorage.setItem("notes_library", JSON.stringify(updatedLibrary));
-
-    // Also remove from the episode-specific key
+    localStorage.setItem("notes_library", JSON.stringify(library.filter((n) => n.id !== noteId)));
     const episodeKey = `notes_${episodeGuid}`;
     const episodeNotes = JSON.parse(localStorage.getItem(episodeKey) || "[]");
-    const updatedEpisode = episodeNotes.filter((n) => n.id !== noteId);
-    localStorage.setItem(episodeKey, JSON.stringify(updatedEpisode));
-
-    // Update state
+    localStorage.setItem(episodeKey, JSON.stringify(episodeNotes.filter((n) => n.id !== noteId)));
     setAllNotes(allNotes.filter((n) => n.id !== noteId));
   }
 
-  /* ── CLEAR ALL NOTES ── */
   function handleClearAll() {
-    if (
-      !window.confirm(
-        "Delete all notes from your library? This cannot be undone.",
-      )
-    )
-      return;
+    if (!window.confirm("Delete all notes from your library? This cannot be undone.")) return;
     localStorage.setItem("notes_library", "[]");
     setAllNotes([]);
   }
@@ -61,186 +39,112 @@ function NotesLibrary() {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
 
-  /* ── FILTER NOTES BY SEARCH TERM ── */
   const filtered = allNotes.filter((note) => {
     const term = search.toLowerCase();
-    return (
-      note.text?.toLowerCase().includes(term) ||
-      note.episodeTitle?.toLowerCase().includes(term)
-    );
+    return note.text?.toLowerCase().includes(term) || note.episodeTitle?.toLowerCase().includes(term);
   });
 
-  /* ── GROUP NOTES BY EPISODE ── */
   const grouped = filtered.reduce((acc, note) => {
     const key = note.episodeGuid || note.episodeTitle;
-    if (!acc[key]) {
-      acc[key] = {
-        title: note.episodeTitle,
-        image: note.podcastImage,
-        notes: [],
-      };
-    }
+    if (!acc[key]) acc[key] = { title: note.episodeTitle, image: note.podcastImage, notes: [] };
     acc[key].notes.push(note);
     return acc;
   }, {});
 
   return (
-    <div
-      style={{ minHeight: "100vh", background: "#f8f7f4", color: "#1a1a2e" }}
-    >
+    <div style={{ minHeight: "100vh", background: colors.bg, color: colors.textPrimary, fontFamily: fonts.body }}>
+
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600&display=swap');
+        @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+        * { box-sizing: border-box; }
+        ::placeholder { color: #6B6B7A; }
+      `}</style>
+
       {/* ── NAV ── */}
-      <nav
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "1.25rem 2.5rem",
-          background: "#fff",
-          borderBottom: "1px solid #ebebeb",
-          position: "sticky",
-          top: 0,
-          zIndex: 100,
-        }}
-      >
-        <span
-          onClick={() => navigate("/")}
-          style={{
-            fontSize: "1.3rem",
-            fontWeight: "700",
-            letterSpacing: "0.04em",
-            color: "#1a1a2e",
-            fontFamily: "Georgia, serif",
-            cursor: "pointer",
-          }}
-        >
-          POD<span style={{ color: "#6c47ff" }}>PLAYER</span>
+      <nav style={nav}>
+        <span onClick={() => navigate("/")} style={{ fontSize: "1.3rem", fontWeight: "800", fontFamily: fonts.heading, cursor: "pointer" }}>
+          POD<span style={{ color: colors.purple }}>PLAYER</span>
         </span>
-        <button
-          onClick={() => navigate(-1)}
-          style={{
-            background: "none",
-            border: "1px solid #e0e0e0",
-            color: "#666",
-            padding: "0.45rem 1.1rem",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontSize: "0.85rem",
-            fontWeight: "500",
-          }}
-        >
-          Back
-        </button>
+        <button onClick={() => navigate(-1)} style={{
+          background: colors.bgCard, border: `1px solid ${colors.border}`,
+          color: colors.textSecondary, padding: "0.45rem 1rem",
+          borderRadius: "8px", cursor: "pointer", fontSize: "0.82rem",
+        }}>← Back</button>
       </nav>
 
-      {/* ── PAGE HEADER ── */}
-      <div
-        style={{
-          maxWidth: "760px",
-          margin: "0 auto",
-          padding: "3rem 2rem 1.5rem",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            marginBottom: "1.5rem",
-          }}
-        >
-          <div>
-            <h1
-              style={{
-                fontSize: "1.8rem",
-                fontFamily: "Georgia, serif",
-                fontWeight: "normal",
-                color: "#1a1a2e",
-                marginBottom: "0.4rem",
+      <div style={{ maxWidth: "800px", margin: "0 auto", padding: "3.5rem 2rem 5rem" }}>
+
+        {/* ── PAGE HEADER ── */}
+        <div style={{ marginBottom: "2.5rem", animation: "fadeUp 0.5s ease both" }}>
+          <p style={{ color: colors.purple, fontSize: "0.7rem", fontWeight: "700", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: "0.5rem" }}>
+            Your Library
+          </p>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
+            <div>
+              <h1 style={{ fontFamily: fonts.heading, fontSize: "2.2rem", fontWeight: "800", letterSpacing: "-0.02em", marginBottom: "0.4rem" }}>
+                Notes Library
+              </h1>
+              <p style={{ color: colors.textSecondary, fontSize: "0.9rem" }}>
+                {allNotes.length === 0
+                  ? "No notes saved yet — start listening and take notes!"
+                  : `${allNotes.length} note${allNotes.length > 1 ? "s" : ""} across ${Object.keys(grouped).length} episode${Object.keys(grouped).length > 1 ? "s" : ""}`}
+              </p>
+            </div>
+            {allNotes.length > 0 && (
+              <button onClick={handleClearAll} style={{
+                background: "none", border: "1px solid rgba(239,68,68,0.3)",
+                color: colors.red, padding: "0.45rem 1rem",
+                borderRadius: "8px", cursor: "pointer", fontSize: "0.82rem",
+                flexShrink: 0, transition: "all 0.15s",
               }}
-            >
-              Notes Library
-            </h1>
-            <p style={{ color: "#aaa", fontSize: "0.9rem" }}>
-              {allNotes.length === 0
-                ? "No notes saved yet — start listening and take notes!"
-                : `${allNotes.length} note${allNotes.length > 1 ? "s" : ""} across ${Object.keys(grouped).length} episode${Object.keys(grouped).length > 1 ? "s" : ""}`}
-            </p>
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.08)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+              >
+                Clear All
+              </button>
+            )}
           </div>
-          {allNotes.length > 0 && (
-            <button
-              onClick={handleClearAll}
-              style={{
-                background: "none",
-                border: "1px solid #fecaca",
-                color: "#ef4444",
-                padding: "0.45rem 1rem",
-                borderRadius: "8px",
-                cursor: "pointer",
-                fontSize: "0.82rem",
-                fontWeight: "500",
-              }}
-            >
-              Clear All
-            </button>
-          )}
         </div>
 
         {/* ── SEARCH ── */}
         {allNotes.length > 0 && (
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search your notes..."
-            style={{
-              width: "100%",
-              border: "1px solid #ebebeb",
-              borderRadius: "10px",
-              padding: "0.75rem 1rem",
-              fontSize: "0.9rem",
-              background: "#fff",
-              color: "#1a1a2e",
-              outline: "none",
-              boxSizing: "border-box",
-              marginBottom: "2rem",
-            }}
-          />
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.75rem",
+            background: colors.bgCard, border: `1px solid ${colors.border}`,
+            borderRadius: "12px", padding: "0.6rem 1rem", marginBottom: "2rem",
+            animation: "fadeUp 0.5s ease 0.1s both",
+          }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={colors.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search your notes by keyword or episode title..."
+              style={{ ...input, background: "transparent", border: "none", flex: 1, fontSize: "0.9rem", padding: 0 }}
+            />
+          </div>
         )}
 
         {/* ── EMPTY STATE ── */}
         {allNotes.length === 0 && (
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: "16px",
-              padding: "3rem 2rem",
-              textAlign: "center",
-              border: "1px solid #ebebeb",
-            }}
-          >
-            <p style={{ fontSize: "2rem", marginBottom: "1rem" }}>📝</p>
-            <p
-              style={{
-                color: "#aaa",
-                fontSize: "0.95rem",
-                marginBottom: "1.25rem",
-              }}
-            >
-              Your notes will appear here once you start saving them while
-              listening.
+          <div style={{
+            background: colors.bgCard, border: `1px solid ${colors.border}`,
+            borderRadius: "20px", padding: "4rem 2rem", textAlign: "center",
+            animation: "fadeUp 0.5s ease 0.1s both",
+          }}>
+            <div style={{
+              width: "64px", height: "64px", borderRadius: "50%", background: colors.purpleDim,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              margin: "0 auto 1.25rem", fontSize: "1.6rem",
+            }}>📝</div>
+            <p style={{ color: colors.textSecondary, fontSize: "0.95rem", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+              Your notes will appear here once you start saving them while listening.
             </p>
-            <button
-              onClick={() => navigate("/")}
-              style={{
-                background: "#6c47ff",
-                color: "#fff",
-                border: "none",
-                padding: "0.6rem 1.5rem",
-                borderRadius: "8px",
-                cursor: "pointer",
-                fontSize: "0.88rem",
-                fontWeight: "600",
-              }}
-            >
+            <button onClick={() => navigate("/")} style={{ ...btnPrimary }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.88"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}>
               Browse Podcasts
             </button>
           </div>
@@ -248,133 +152,74 @@ function NotesLibrary() {
 
         {/* ── NO SEARCH RESULTS ── */}
         {allNotes.length > 0 && filtered.length === 0 && (
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: "12px",
-              padding: "2rem",
-              textAlign: "center",
-              border: "1px solid #ebebeb",
-              color: "#bbb",
-            }}
-          >
+          <div style={{ background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: "12px", padding: "2rem", textAlign: "center", color: colors.textMuted }}>
             <p>No notes match "{search}"</p>
           </div>
         )}
 
         {/* ── GROUPED NOTES BY EPISODE ── */}
-        {Object.entries(grouped).map(([key, group]) => (
-          <div key={key} style={{ marginBottom: "2rem" }}>
+        {Object.entries(grouped).map(([key, group], groupIndex) => (
+          <div key={key} style={{ marginBottom: "2rem", animation: `fadeUp 0.4s ease ${groupIndex * 0.08}s both` }}>
+
             {/* Episode header */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                marginBottom: "0.75rem",
-              }}
-            >
+            <div style={{
+              display: "flex", alignItems: "center", gap: "0.85rem",
+              marginBottom: "0.85rem", padding: "0 0.25rem",
+            }}>
               {group.image && (
-                <img
-                  src={group.image}
-                  alt={group.title}
-                  style={{
-                    width: "40px",
-                    height: "40px",
-                    borderRadius: "8px",
-                    objectFit: "cover",
-                    flexShrink: 0,
-                  }}
-                />
+                <img src={group.image} alt={group.title} style={{
+                  width: "44px", height: "44px", borderRadius: "10px",
+                  objectFit: "cover", flexShrink: 0,
+                  border: `1px solid ${colors.border}`,
+                }} />
               )}
               <div>
-                <p
-                  style={{
-                    fontWeight: "700",
-                    color: "#1a1a2e",
-                    fontSize: "0.9rem",
-                    marginBottom: "0.1rem",
-                  }}
-                >
+                <p style={{ fontWeight: "700", color: colors.textPrimary, fontSize: "0.92rem", marginBottom: "0.15rem" }}>
                   {group.title}
                 </p>
-                <p style={{ color: "#aaa", fontSize: "0.75rem" }}>
+                <p style={{ color: colors.textMuted, fontSize: "0.75rem" }}>
                   {group.notes.length} note{group.notes.length > 1 ? "s" : ""}
                 </p>
               </div>
             </div>
 
-            {/* Notes for this episode */}
-            {group.notes.map((note) => (
-              <div
-                key={note.id}
-                style={{
-                  background: "#fff",
-                  border: "1px solid #ebebeb",
-                  borderRadius: "12px",
-                  padding: "1rem 1.25rem",
-                  marginBottom: "0.6rem",
-                }}
+            {/* Notes */}
+            {group.notes.map((note, noteIndex) => (
+              <div key={note.id} style={{
+                background: colors.bgCard, border: `1px solid ${colors.border}`,
+                borderRadius: "14px", padding: "1.1rem 1.25rem", marginBottom: "0.6rem",
+                transition: "border-color 0.15s",
+              }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = colors.borderAccent; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border; }}
               >
-                {/* Note meta: timestamp + date written */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: "0.5rem",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.5rem",
-                    }}
-                  >
-                    {/* Audio timestamp the note was written at */}
-                    <span
-                      style={{
-                        background: "#f0edff",
-                        color: "#6c47ff",
-                        padding: "0.12rem 0.45rem",
-                        borderRadius: "4px",
-                        fontSize: "0.7rem",
-                        fontFamily: "monospace",
-                      }}
-                    >
+                {/* Meta row */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    {/* Timestamp badge */}
+                    <span style={{
+                      background: colors.purpleDim, color: colors.purpleLight,
+                      padding: "0.15rem 0.55rem", borderRadius: "4px",
+                      fontSize: "0.7rem", fontFamily: fonts.mono,
+                    }}>
                       @ {formatTime(note.timestamp)}
                     </span>
-                    <span style={{ color: "#bbb", fontSize: "0.72rem" }}>
-                      Written {note.writtenAt}
+                    <span style={{ color: colors.textMuted, fontSize: "0.72rem" }}>
+                      {note.writtenAt}
                     </span>
                   </div>
-                  {/* Delete button */}
-                  <button
-                    onClick={() => handleDelete(note.id, note.episodeGuid)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "#ddd",
-                      cursor: "pointer",
-                      fontSize: "0.8rem",
-                      padding: 0,
-                    }}
-                  >
-                    ✕
-                  </button>
+                  <button onClick={() => handleDelete(note.id, note.episodeGuid)} style={{
+                    background: "none", border: "none", color: colors.textMuted,
+                    cursor: "pointer", fontSize: "0.85rem", padding: "0.1rem 0.25rem",
+                    borderRadius: "4px", transition: "color 0.15s",
+                  }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = colors.red; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = colors.textMuted; }}
+                  >✕</button>
                 </div>
 
                 {/* Note text */}
-                <p
-                  style={{
-                    color: "#444",
-                    fontSize: "0.9rem",
-                    lineHeight: 1.6,
-                    whiteSpace: "pre-wrap",
-                    margin: 0,
-                  }}
-                >
+                <p style={{ color: colors.textSecondary, fontSize: "0.9rem", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>
                   {note.text}
                 </p>
               </div>
@@ -382,16 +227,9 @@ function NotesLibrary() {
           </div>
         ))}
 
-        {/* ── FOOTER ── */}
+        {/* Footer */}
         {allNotes.length > 0 && (
-          <p
-            style={{
-              color: "#ddd",
-              fontSize: "0.75rem",
-              textAlign: "center",
-              marginTop: "2rem",
-            }}
-          >
+          <p style={{ color: colors.textMuted, fontSize: "0.75rem", textAlign: "center", marginTop: "1.5rem" }}>
             Notes are saved locally in your browser
           </p>
         )}
